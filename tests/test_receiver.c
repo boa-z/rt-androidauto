@@ -612,8 +612,10 @@ static void test_control_extensions(fixture *f)
     c.protocol_minor = 4;
     c.sink.navigation_focus = NULL;
     assert(!rtaa_receiver_create(&c, &r));
-    connect(f, r); /* downgrade to 1.1 */
-    assert(rtaa_receiver_call_available(r, true) == RTAA_ENOTSUP && !f->writes_size);
+    connect(f, r);                                  /* downgrade to 1.1 */
+    assert(!rtaa_receiver_call_available(r, true)); /* explicit application opt-in */
+    drain(f);
+    assert(f->message == 24 && f->body_size == 2 && f->body[1] == 1);
     focus = (aap_NavigationFocus){true, 2};
     assert(!send_proto(f, r, 0, 13, aap_NavigationFocus_fields, &focus));
     drain(f);

@@ -9,7 +9,7 @@ dashboard. Phone, board and DHU acceptance remain NOT_RUN.
 | Navigation focus | Control 13 decodes type 1/2 and responds with 14, reporting the application's actual owner. Without a callback it reports native ownership. Invalid enums fail; no third indication is invented. |
 | Voice session | Control 17 delivers START/STOP to an optional callback. No response is invented. Unknown optional protobuf fields are structurally validated and skipped. |
 | Phone battery | Control 23 preserves optional level/time/critical presence. Explicit zero and absent level remain distinct. Levels above 100 fail. This is phone battery, not vehicle SOC. |
-| Call availability | Explicit output API sends control 24 for negotiated minor >=4. Application supplies actual availability; this does not implement HFP or call audio routing. |
+| Call availability | Explicit output API sends control 24 only on application request, without inventing a version gate. Application supplies actual availability; this does not implement HFP or call audio routing. |
 | Channel close | Legacy empty control 9 targets its envelope service channel. Stops that service, resets setup/binding/subscriptions, and permits reopen on the existing TLS session. Missing control flag and control-channel close fail. Modern transport-wrapper variants remain unverified. |
 | Fragmented TX | FIRST/MIDDLE/LAST, plaintext total only on FIRST, separately encrypted fragments. Up to 65,518 microphone PCM bytes consume one ACK slot. Partial failure terminates the session without counting a completed upload. |
 | TLS RX | Multiple complete TLS records can form one AAP fragment. Truncated/delayed records never spill into another channel. Records spanning AAP frames remain unsupported. |
@@ -57,3 +57,7 @@ sequence. A parseable status is not evidence of successful TCP/AAP startup.
 Wireless needs an explicit supported dialect, exact fixtures and platform-owned
 SDP/pairing/AP/TCP lifetimes. No wireless implementation or default credentials
 are claimed by this checkpoint.
+
+The references do not establish a minimum AAP version for call availability.
+It remains an explicit application API; no message is sent automatically and no
+minimum version is inferred from an unrelated battery/version gate.

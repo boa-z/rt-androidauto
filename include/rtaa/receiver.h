@@ -113,7 +113,8 @@ extern "C"
     int rtaa_receiver_shutdown(rtaa_receiver *);
     /* The negotiated minor is available after VERSION, zero beforehand. */
     uint16_t rtaa_receiver_protocol_minor(const rtaa_receiver *);
-    /* Notify actual HFP/call availability; valid for negotiated AAP >=1.4. */
+    /* Explicitly notify actual HFP/call availability. Never sent automatically;
+     * the application chooses whether to use this optional peer capability. */
     int rtaa_receiver_call_available(rtaa_receiver *, bool available);
     /* Close only this service, preserving the control/TLS session. The peer
      * may reopen and renegotiate it later. Does not fabricate release events. */

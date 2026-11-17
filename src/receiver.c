@@ -1019,8 +1019,6 @@ int rtaa_receiver_call_available(rtaa_receiver *r, bool available)
 {
     if (!r || r->state != RTAA_CONNECTED)
         return RTAA_ESTATE;
-    if (r->protocol_minor < 4)
-        return RTAA_ENOTSUP;
     aap_CallAvailability v = {true, available};
     int rc = send_pb(r, 0, 24, aap_CallAvailability_fields, &v, true, true);
     return rc ? fail(r, rc) : RTAA_OK;
