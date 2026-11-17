@@ -30,7 +30,7 @@ else()
       INTERFACE_INCLUDE_DIRECTORIES "${MBEDTLS_INCLUDE_DIR}")
   endforeach()
 endif()
-add_library(rtaa STATIC src/framing.c src/aoa.c src/transport.c src/tls_mbedtls.c src/connection.c
+add_library(rtaa STATIC src/framing.c src/aoa.c src/transport.c src/tls_mbedtls.c src/connection.c src/wireless.c
   src/receiver.c src/status.c generated/aap.pb.c third_party/nanopb/pb_common.c
   third_party/nanopb/pb_encode.c third_party/nanopb/pb_decode.c)
 target_compile_features(rtaa PUBLIC c_std_11)
@@ -51,7 +51,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 if(RTAA_TESTS)
   enable_testing()
-  foreach(name core protobuf tls receiver)
+  foreach(name core protobuf tls receiver wireless)
     add_executable(test_${name} tests/test_${name}.c)
     target_link_libraries(test_${name} PRIVATE rtaa)
     target_include_directories(test_${name} PRIVATE generated third_party/nanopb tests)

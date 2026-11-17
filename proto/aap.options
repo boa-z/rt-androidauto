@@ -27,3 +27,9 @@ aap.NavDistance.display_text max_size:128
 aap.NavDestinationDistance.estimated_time_of_arrival max_size:128
 aap.NavigationPosition.destinations max_count:2
 aap.NavigationTurn.road_name max_size:128
+aap.WifiStart.address max_size:16
+aap.WifiCredentials.ssid max_size:33
+aap.WifiCredentials.key max_size:65
+aap.WifiCredentials.bssid max_size:18
+aap.WifiConnectStatus.text max_size:256
+aap.WifiStartResponse.address max_size:64

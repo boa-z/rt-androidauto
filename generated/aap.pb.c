@@ -195,4 +195,25 @@ PB_BIND(aap_NavigationPosition, aap_NavigationPosition, 2)
 PB_BIND(aap_NavigationTurn, aap_NavigationTurn, AUTO)
 
 
+PB_BIND(aap_WifiStart, aap_WifiStart, AUTO)
+
+
+PB_BIND(aap_WifiInfoRequest, aap_WifiInfoRequest, AUTO)
+
+
+PB_BIND(aap_WifiCredentials, aap_WifiCredentials, AUTO)
+
+
+PB_BIND(aap_WifiConnectStatus, aap_WifiConnectStatus, 2)
+
+
+PB_BIND(aap_WifiStartResponse, aap_WifiStartResponse, AUTO)
+
+
+PB_BIND(aap_WifiPing, aap_WifiPing, AUTO)
+
+
+PB_BIND(aap_WifiRejection, aap_WifiRejection, AUTO)
+
+
 

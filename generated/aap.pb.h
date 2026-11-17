@@ -469,6 +469,50 @@ typedef struct _aap_NavigationTurn {
     int32_t distance_unit;
 } aap_NavigationTurn;
 
+/* Bluetooth RFCOMM bootstrap; separate framing and namespace from AAP. */
+typedef struct _aap_WifiStart {
+    char address[16];
+    uint32_t port;
+} aap_WifiStart;
+
+typedef struct _aap_WifiInfoRequest {
+    char dummy_field;
+} aap_WifiInfoRequest;
+
+typedef struct _aap_WifiCredentials {
+    char ssid[33];
+    char key[65];
+    char bssid[18];
+    uint32_t security;
+    uint32_t access_point_type;
+} aap_WifiCredentials;
+
+typedef struct _aap_WifiConnectStatus {
+    bool has_state;
+    int32_t state;
+    bool has_text;
+    char text[256];
+} aap_WifiConnectStatus;
+
+typedef struct _aap_WifiStartResponse {
+    bool has_address;
+    char address[64];
+    bool has_port;
+    int32_t port;
+    bool has_status;
+    int32_t status;
+} aap_WifiStartResponse;
+
+typedef struct _aap_WifiPing {
+    bool has_timestamp;
+    int64_t timestamp;
+} aap_WifiPing;
+
+typedef struct _aap_WifiRejection {
+    bool has_reason;
+    int32_t reason;
+} aap_WifiRejection;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -538,6 +582,13 @@ extern "C" {
 #define aap_NavDestinationDistance_init_default  {false, aap_NavDistance_init_default, false, "", false, 0}
 #define aap_NavigationPosition_init_default      {false, aap_NavStepDistance_init_default, 0, {aap_NavDestinationDistance_init_default, aap_NavDestinationDistance_init_default}, false, aap_NavText_init_default}
 #define aap_NavigationTurn_init_default          {false, "", false, 0, false, 0, false, 0, false, 0}
+#define aap_WifiStart_init_default               {"", 0}
+#define aap_WifiInfoRequest_init_default         {0}
+#define aap_WifiCredentials_init_default         {"", "", "", 0, 0}
+#define aap_WifiConnectStatus_init_default       {false, 0, false, ""}
+#define aap_WifiStartResponse_init_default       {false, "", false, 0, false, 0}
+#define aap_WifiPing_init_default                {false, 0}
+#define aap_WifiRejection_init_default           {false, 0}
 #define aap_Empty_init_zero                      {0}
 #define aap_Status_init_zero                     {0}
 #define aap_ChannelOpen_init_zero                {0, 0}
@@ -601,6 +652,13 @@ extern "C" {
 #define aap_NavDestinationDistance_init_zero     {false, aap_NavDistance_init_zero, false, "", false, 0}
 #define aap_NavigationPosition_init_zero         {false, aap_NavStepDistance_init_zero, 0, {aap_NavDestinationDistance_init_zero, aap_NavDestinationDistance_init_zero}, false, aap_NavText_init_zero}
 #define aap_NavigationTurn_init_zero             {false, "", false, 0, false, 0, false, 0, false, 0}
+#define aap_WifiStart_init_zero                  {"", 0}
+#define aap_WifiInfoRequest_init_zero            {0}
+#define aap_WifiCredentials_init_zero            {"", "", "", 0, 0}
+#define aap_WifiConnectStatus_init_zero          {false, 0, false, ""}
+#define aap_WifiStartResponse_init_zero          {false, "", false, 0, false, 0}
+#define aap_WifiPing_init_zero                   {false, 0}
+#define aap_WifiRejection_init_zero              {false, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define aap_Status_status_tag                    1
@@ -754,6 +812,20 @@ extern "C" {
 #define aap_NavigationTurn_turn_direction_tag    3
 #define aap_NavigationTurn_distance_meters_tag   5
 #define aap_NavigationTurn_distance_unit_tag     6
+#define aap_WifiStart_address_tag                1
+#define aap_WifiStart_port_tag                   2
+#define aap_WifiCredentials_ssid_tag             1
+#define aap_WifiCredentials_key_tag              2
+#define aap_WifiCredentials_bssid_tag            3
+#define aap_WifiCredentials_security_tag         4
+#define aap_WifiCredentials_access_point_type_tag 5
+#define aap_WifiConnectStatus_state_tag          1
+#define aap_WifiConnectStatus_text_tag           2
+#define aap_WifiStartResponse_address_tag        1
+#define aap_WifiStartResponse_port_tag           2
+#define aap_WifiStartResponse_status_tag         3
+#define aap_WifiPing_timestamp_tag               1
+#define aap_WifiRejection_reason_tag             1
 
 /* Struct field encoding specification for nanopb */
 #define aap_Empty_FIELDLIST(X, a) \
@@ -1196,6 +1268,49 @@ X(a, STATIC,   OPTIONAL, INT32,    distance_unit,     6)
 #define aap_NavigationTurn_CALLBACK NULL
 #define aap_NavigationTurn_DEFAULT NULL
 
+#define aap_WifiStart_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, STRING,   address,           1) \
+X(a, STATIC,   REQUIRED, UINT32,   port,              2)
+#define aap_WifiStart_CALLBACK NULL
+#define aap_WifiStart_DEFAULT NULL
+
+#define aap_WifiInfoRequest_FIELDLIST(X, a) \
+
+#define aap_WifiInfoRequest_CALLBACK NULL
+#define aap_WifiInfoRequest_DEFAULT NULL
+
+#define aap_WifiCredentials_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, STRING,   ssid,              1) \
+X(a, STATIC,   REQUIRED, STRING,   key,               2) \
+X(a, STATIC,   REQUIRED, STRING,   bssid,             3) \
+X(a, STATIC,   REQUIRED, UINT32,   security,          4) \
+X(a, STATIC,   REQUIRED, UINT32,   access_point_type,   5)
+#define aap_WifiCredentials_CALLBACK NULL
+#define aap_WifiCredentials_DEFAULT NULL
+
+#define aap_WifiConnectStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, INT32,    state,             1) \
+X(a, STATIC,   OPTIONAL, STRING,   text,              2)
+#define aap_WifiConnectStatus_CALLBACK NULL
+#define aap_WifiConnectStatus_DEFAULT NULL
+
+#define aap_WifiStartResponse_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, STRING,   address,           1) \
+X(a, STATIC,   OPTIONAL, INT32,    port,              2) \
+X(a, STATIC,   OPTIONAL, INT32,    status,            3)
+#define aap_WifiStartResponse_CALLBACK NULL
+#define aap_WifiStartResponse_DEFAULT NULL
+
+#define aap_WifiPing_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, INT64,    timestamp,         1)
+#define aap_WifiPing_CALLBACK NULL
+#define aap_WifiPing_DEFAULT NULL
+
+#define aap_WifiRejection_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, INT32,    reason,            1)
+#define aap_WifiRejection_CALLBACK NULL
+#define aap_WifiRejection_DEFAULT NULL
+
 extern const pb_msgdesc_t aap_Empty_msg;
 extern const pb_msgdesc_t aap_Status_msg;
 extern const pb_msgdesc_t aap_ChannelOpen_msg;
@@ -1259,6 +1374,13 @@ extern const pb_msgdesc_t aap_NavStepDistance_msg;
 extern const pb_msgdesc_t aap_NavDestinationDistance_msg;
 extern const pb_msgdesc_t aap_NavigationPosition_msg;
 extern const pb_msgdesc_t aap_NavigationTurn_msg;
+extern const pb_msgdesc_t aap_WifiStart_msg;
+extern const pb_msgdesc_t aap_WifiInfoRequest_msg;
+extern const pb_msgdesc_t aap_WifiCredentials_msg;
+extern const pb_msgdesc_t aap_WifiConnectStatus_msg;
+extern const pb_msgdesc_t aap_WifiStartResponse_msg;
+extern const pb_msgdesc_t aap_WifiPing_msg;
+extern const pb_msgdesc_t aap_WifiRejection_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define aap_Empty_fields &aap_Empty_msg
@@ -1324,6 +1446,13 @@ extern const pb_msgdesc_t aap_NavigationTurn_msg;
 #define aap_NavDestinationDistance_fields &aap_NavDestinationDistance_msg
 #define aap_NavigationPosition_fields &aap_NavigationPosition_msg
 #define aap_NavigationTurn_fields &aap_NavigationTurn_msg
+#define aap_WifiStart_fields &aap_WifiStart_msg
+#define aap_WifiInfoRequest_fields &aap_WifiInfoRequest_msg
+#define aap_WifiCredentials_fields &aap_WifiCredentials_msg
+#define aap_WifiConnectStatus_fields &aap_WifiConnectStatus_msg
+#define aap_WifiStartResponse_fields &aap_WifiStartResponse_msg
+#define aap_WifiPing_fields &aap_WifiPing_msg
+#define aap_WifiRejection_fields &aap_WifiRejection_msg
 
 /* Maximum encoded size of messages (where known) */
 #define AAP_AAP_PB_H_MAX_SIZE                    aap_Discovery_size
@@ -1390,6 +1519,13 @@ extern const pb_msgdesc_t aap_NavigationTurn_msg;
 #define aap_VideoFocusRequest_size               12
 #define aap_VideoFocus_size                      8
 #define aap_VoiceSession_size                    6
+#define aap_WifiConnectStatus_size               269
+#define aap_WifiCredentials_size                 131
+#define aap_WifiInfoRequest_size                 0
+#define aap_WifiPing_size                        11
+#define aap_WifiRejection_size                   11
+#define aap_WifiStartResponse_size               87
+#define aap_WifiStart_size                       23
 
 #ifdef __cplusplus
 } /* extern "C" */

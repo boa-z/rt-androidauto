@@ -40,7 +40,10 @@ for name in ["control/ChannelOpenRequestMessage", "audio/AudioConfigData",
              "control/ChannelDescriptorData", "phone/PhoneStatusMessage",
              "phone/PhoneStatusInputMessage", "navigation/NavigationStateMessage",
              "navigation/NavigationNotificationMessage", "navigation/NavigationTurnEventMessage",
-             "navigation/InstrumentClusterMessages"]:
+             "navigation/InstrumentClusterMessages", "wifi/WifiStartRequestMessage",
+             "wifi/WifiSecurityResponseMessage", "wifi/WifiInfoRequestMessage",
+             "wifi/WifiConnectStatusMessage", "wifi/WifiStartResponseMessage",
+             "wifi/WifiPingMessage", "wifi/WifiConnectionRejectionMessage"]:
     collect("oaa/" + name + ".proto")
 args.output.mkdir(parents=True, exist_ok=True)
 subprocess.run([sys.executable, "-m", "grpc_tools.protoc", "-I", str(args.upstream),
@@ -87,6 +90,15 @@ pairs += [
     (ours.NavigationTurn(road_name="Road", maneuver_type=7, turn_direction=1, distance_meters=0, distance_unit=1), upstream(distance_module, "NavigationTurnEvent")(road_name="Road", maneuver_type=7, turn_direction=1, distance_meters=0, distance_unit=1)),
     (ours.Empty(), upstream("navigation.InstrumentClusterMessages", "InstrumentClusterStart")()),
     (ours.Empty(), upstream("navigation.InstrumentClusterMessages", "InstrumentClusterStop")()),
+]
+pairs += [
+    (ours.WifiStart(address="192.168.43.1", port=5288), upstream("wifi.WifiStartRequestMessage", "WifiStartRequest")(ip_address="192.168.43.1", port=5288)),
+    (ours.WifiInfoRequest(), upstream("wifi.WifiInfoRequestMessage", "WifiInfoRequest")()),
+    (ours.WifiCredentials(ssid="AA-test", key="12345678", bssid="02:11:22:33:44:55", security=8, access_point_type=1), upstream("wifi.WifiSecurityResponseMessage", "WifiSecurityResponse")(ssid="AA-test", key="12345678", bssid="02:11:22:33:44:55", security_mode=8, access_point_type=1)),
+    (ours.WifiConnectStatus(state=-1, text="failed"), upstream("wifi.WifiConnectStatusMessage", "WifiConnectStatus")(state=-1, status_text="failed")),
+    (ours.WifiStartResponse(address="192.168.43.1", port=5288, status=1), upstream("wifi.WifiStartResponseMessage", "WifiStartResponse")(ip_address="192.168.43.1", port=5288, status=1)),
+    (ours.WifiPing(timestamp=5000000001), upstream("wifi.WifiPingMessage", "WifiPingRequest")(timestamp_ns=5000000001)),
+    (ours.WifiRejection(reason=0), upstream("wifi.WifiConnectionRejectionMessage", "WifiConnectionRejection")(reason=0)),
 ]
 for a, b in pairs:
     assert a.SerializeToString() == b.SerializeToString(), (a, b)

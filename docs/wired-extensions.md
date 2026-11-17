@@ -43,9 +43,12 @@ Integrated firmware is a separate product check. See `testing.md` for commands.
 
 ## Remaining work and wireless evidence
 
-Still pending: wireless bootstrap/platform adapters, modern feature/service
-updates, media metadata, navigation/phone status services, additional sensors,
-multi-touch, microphone capture/AEC and complete product focus ownership.
+This is a historical wired-extension checkpoint. Media metadata and bounded
+navigation/phone services have since been implemented; see
+[navigation-phone.md](navigation-phone.md). The portable wireless bootstrap
+profile is now described in [wireless.md](wireless.md). Remaining work includes
+modern feature/service updates, additional sensors, multi-touch, microphone
+capture/AEC and complete product focus ownership.
 
 Wireless research additionally inspected `nisargjhaveri/WirelessAndroidAutoDongle`
 at `ef645221ec28e87361391b9bdcf27e31ff48cb6f` (GPL-3.0). Its four-byte

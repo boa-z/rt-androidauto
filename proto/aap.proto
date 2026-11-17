@@ -167,3 +167,21 @@ message NavigationTurn {
   optional int32 distance_meters = 5;
   optional int32 distance_unit = 6;
 }
+// Bluetooth RFCOMM bootstrap; separate framing and namespace from AAP.
+message WifiStart { required string address = 1; required uint32 port = 2; }
+message WifiInfoRequest {}
+message WifiCredentials {
+  required string ssid = 1;
+  required string key = 2;
+  required string bssid = 3;
+  required uint32 security = 4;
+  required uint32 access_point_type = 5;
+}
+message WifiConnectStatus { optional int32 state = 1; optional string text = 2; }
+message WifiStartResponse {
+  optional string address = 1;
+  optional int32 port = 2;
+  optional int32 status = 3;
+}
+message WifiPing { optional int64 timestamp = 1; }
+message WifiRejection { optional int32 reason = 1; }
