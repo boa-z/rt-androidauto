@@ -1,6 +1,6 @@
 aap.* max_count:8
 aap.* max_size:96
-aap.Discovery.channels max_count:8
+aap.Discovery.channels max_count:10
 aap.AVChannel.audio_configs max_count:1
 aap.AVChannel.video_configs max_count:1
 aap.SetupResponse.configs max_count:1
@@ -13,3 +13,17 @@ aap.Binding.keycodes max_count:32
 aap.RelativeInputs.events max_count:1
 aap.MediaStatus.source_app max_size:256
 aap.MediaMetadata.* max_size:256
+aap.PhoneCall.* max_size:128
+aap.PhoneStatus.calls max_count:4
+aap.PhoneInput.* max_size:128
+aap.NavText.text max_size:128
+aap.NavRoadInfo.road_names max_size:128 max_count:3
+aap.NavLane.directions max_count:3
+aap.NavStep.lanes max_count:6
+aap.NavigationNotification.steps max_count:4
+aap.NavigationNotification.destinations max_count:2
+aap.NavDestination.address max_size:128
+aap.NavDistance.display_text max_size:128
+aap.NavDestinationDistance.estimated_time_of_arrival max_size:128
+aap.NavigationPosition.destinations max_count:2
+aap.NavigationTurn.road_name max_size:128

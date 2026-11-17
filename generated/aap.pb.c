@@ -45,6 +45,9 @@ PB_BIND(aap_Sensor, aap_Sensor, AUTO)
 PB_BIND(aap_SensorChannel, aap_SensorChannel, AUTO)
 
 
+PB_BIND(aap_NavigationChannel, aap_NavigationChannel, AUTO)
+
+
 PB_BIND(aap_Channel, aap_Channel, 2)
 
 
@@ -133,6 +136,63 @@ PB_BIND(aap_MediaStatus, aap_MediaStatus, 2)
 
 
 PB_BIND(aap_MediaMetadata, aap_MediaMetadata, 2)
+
+
+PB_BIND(aap_PhoneCall, aap_PhoneCall, 2)
+
+
+PB_BIND(aap_PhoneStatus, aap_PhoneStatus, 2)
+
+
+PB_BIND(aap_PhoneInputType, aap_PhoneInputType, AUTO)
+
+
+PB_BIND(aap_PhoneInput, aap_PhoneInput, 2)
+
+
+PB_BIND(aap_NavigationState, aap_NavigationState, AUTO)
+
+
+PB_BIND(aap_NavManeuver, aap_NavManeuver, AUTO)
+
+
+PB_BIND(aap_NavText, aap_NavText, AUTO)
+
+
+PB_BIND(aap_NavDirection, aap_NavDirection, AUTO)
+
+
+PB_BIND(aap_NavLane, aap_NavLane, AUTO)
+
+
+PB_BIND(aap_NavRoadInfo, aap_NavRoadInfo, 2)
+
+
+PB_BIND(aap_NavStep, aap_NavStep, 2)
+
+
+PB_BIND(aap_NavChargingStation, aap_NavChargingStation, AUTO)
+
+
+PB_BIND(aap_NavDestination, aap_NavDestination, AUTO)
+
+
+PB_BIND(aap_NavigationNotification, aap_NavigationNotification, 2)
+
+
+PB_BIND(aap_NavDistance, aap_NavDistance, AUTO)
+
+
+PB_BIND(aap_NavStepDistance, aap_NavStepDistance, AUTO)
+
+
+PB_BIND(aap_NavDestinationDistance, aap_NavDestinationDistance, 2)
+
+
+PB_BIND(aap_NavigationPosition, aap_NavigationPosition, 2)
+
+
+PB_BIND(aap_NavigationTurn, aap_NavigationTurn, AUTO)
 
 
 

@@ -2,6 +2,7 @@
 #ifndef RTAA_RECEIVER_H
 #define RTAA_RECEIVER_H
 #include "rtaa/tls.h"
+#include "rtaa/status.h"
 #ifdef __cplusplus
 extern "C"
 {
@@ -16,6 +17,8 @@ extern "C"
         RTAA_INPUT,
         RTAA_SENSOR,
         RTAA_MEDIA_INFO,
+        RTAA_NAVIGATION,
+        RTAA_PHONE,
         RTAA_ROLE_COUNT
     } rtaa_role;
     typedef enum
@@ -88,6 +91,15 @@ extern "C"
         int (*media_status)(void *, const rtaa_media_status *);
         int (*media_metadata)(void *, const rtaa_media_metadata *);
         void (*media_info_reset)(void *);
+        /* All callbacks for each enabled service are required. Callback errors
+         * retire the session; reset is once per opened channel on retirement. */
+        int (*phone_status)(void *, const rtaa_phone_status *);
+        void (*phone_reset)(void *);
+        int (*navigation_state)(void *, const rtaa_navigation_state *);
+        int (*navigation_notification)(void *, const rtaa_navigation_notification *);
+        int (*navigation_position)(void *, const rtaa_navigation_position *);
+        int (*navigation_turn)(void *, const rtaa_navigation_turn *);
+        void (*navigation_reset)(void *);
     } rtaa_sink;
     typedef struct
     {
@@ -109,6 +121,9 @@ extern "C"
          * 32 distinct positive values. Zero count preserves the legacy set. */
         uint32_t input_keycodes[32];
         uint8_t input_keycode_count;
+        /* Advertised semantic TURN_BY_TURN interval, 0 defaults to 1000 ms.
+         * Nonnegative int32; no NEXT_TURN_IMAGE capability is advertised. */
+        int32_t navigation_interval_ms;
     } rtaa_receiver_config;
     typedef struct
     {
@@ -141,6 +156,14 @@ extern "C"
     /* Explicitly notify actual HFP/call availability. Never sent automatically;
      * the application chooses whether to use this optional peer capability. */
     int rtaa_receiver_call_available(rtaa_receiver *, bool available);
+    /* Explicit cluster start/stop (0x8001/0x8002); requires an opened service.
+     * Repeating the current state is idempotent. Close/reopen clears it. */
+    int rtaa_receiver_navigation(rtaa_receiver *, bool enabled);
+    /* Phone-status input 0x8002: d-pad actions 0..7; CALL=7 is the reference's
+     * generic cluster action, not a verified answer/hangup/dial operation.
+     * NULL strings are absent, empty strings present; max 127 bytes each. */
+    int rtaa_receiver_phone_input(rtaa_receiver *, uint32_t action, const char *caller_id,
+                                  const char *display_name);
     /* Close only this service, preserving the control/TLS session. The peer
      * may reopen and renegotiate it later. Does not fabricate release events. */
     int rtaa_receiver_close_channel(rtaa_receiver *, rtaa_role);

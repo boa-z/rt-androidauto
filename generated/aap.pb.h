@@ -91,6 +91,11 @@ typedef struct _aap_SensorChannel {
     aap_Sensor sensors[8];
 } aap_SensorChannel;
 
+typedef struct _aap_NavigationChannel {
+    int32_t minimum_interval_ms;
+    uint32_t type;
+} aap_NavigationChannel;
+
 typedef struct _aap_Channel {
     int32_t channel_id;
     bool has_sensor;
@@ -101,13 +106,17 @@ typedef struct _aap_Channel {
     aap_InputChannel input;
     bool has_av_input;
     aap_AVInput av_input;
+    bool has_navigation;
+    aap_NavigationChannel navigation;
     bool has_media_info;
     aap_Empty media_info;
+    bool has_phone;
+    aap_Empty phone;
 } aap_Channel;
 
 typedef struct _aap_Discovery {
     pb_size_t channels_count;
-    aap_Channel channels[8];
+    aap_Channel channels[10];
     bool has_head_unit_name;
     char head_unit_name[96];
     bool has_driver_position;
@@ -312,6 +321,154 @@ typedef struct _aap_MediaMetadata {
     char album[256];
 } aap_MediaMetadata;
 
+typedef struct _aap_PhoneCall {
+    uint32_t state;
+    uint32_t duration_seconds;
+    bool has_number;
+    char number[128];
+    bool has_display_name;
+    char display_name[128];
+    bool has_contact_id;
+    char contact_id[128]; /* Contact-photo field 6 is intentionally skipped. */
+} aap_PhoneCall;
+
+typedef struct _aap_PhoneStatus {
+    pb_size_t calls_count;
+    aap_PhoneCall calls[4];
+    bool has_signal_strength;
+    uint32_t signal_strength;
+} aap_PhoneStatus;
+
+typedef struct _aap_PhoneInputType {
+    uint32_t action;
+} aap_PhoneInputType;
+
+typedef struct _aap_PhoneInput {
+    aap_PhoneInputType input_type;
+    bool has_caller_id;
+    char caller_id[128];
+    bool has_display_name;
+    char display_name[128];
+} aap_PhoneInput;
+
+typedef struct _aap_NavigationState {
+    bool has_state;
+    uint32_t state;
+} aap_NavigationState;
+
+typedef struct _aap_NavManeuver {
+    bool has_type;
+    uint32_t type;
+    bool has_exit_number;
+    int32_t exit_number;
+    bool has_turn_angle;
+    int32_t turn_angle;
+} aap_NavManeuver;
+
+typedef struct _aap_NavText {
+    bool has_text;
+    char text[128];
+} aap_NavText;
+
+typedef struct _aap_NavDirection {
+    bool has_shape;
+    uint32_t shape;
+    bool has_recommended;
+    bool recommended;
+} aap_NavDirection;
+
+typedef struct _aap_NavLane {
+    pb_size_t directions_count;
+    aap_NavDirection directions[3];
+} aap_NavLane;
+
+typedef struct _aap_NavRoadInfo {
+    pb_size_t road_names_count;
+    char road_names[3][128];
+} aap_NavRoadInfo;
+
+typedef struct _aap_NavStep {
+    bool has_maneuver;
+    aap_NavManeuver maneuver;
+    bool has_instruction;
+    aap_NavText instruction;
+    pb_size_t lanes_count;
+    aap_NavLane lanes[6];
+    bool has_road_info;
+    aap_NavRoadInfo road_info;
+} aap_NavStep;
+
+typedef struct _aap_NavChargingStation {
+    bool has_connector_count;
+    int32_t connector_count;
+    bool has_available_count;
+    int32_t available_count;
+    bool has_max_power_kw;
+    int32_t max_power_kw;
+} aap_NavChargingStation;
+
+typedef struct _aap_NavDestination {
+    bool has_address;
+    char address[128];
+    bool has_charging_station;
+    aap_NavChargingStation charging_station;
+} aap_NavDestination;
+
+typedef struct _aap_NavigationNotification {
+    pb_size_t steps_count;
+    aap_NavStep steps[4];
+    pb_size_t destinations_count;
+    aap_NavDestination destinations[2];
+} aap_NavigationNotification;
+
+typedef struct _aap_NavDistance {
+    bool has_value;
+    int32_t value;
+    bool has_display_text;
+    char display_text[128];
+    bool has_unit;
+    uint32_t unit;
+} aap_NavDistance;
+
+typedef struct _aap_NavStepDistance {
+    bool has_distance;
+    aap_NavDistance distance;
+    bool has_time_to_step_seconds;
+    int64_t time_to_step_seconds;
+} aap_NavStepDistance;
+
+typedef struct _aap_NavDestinationDistance {
+    bool has_distance;
+    aap_NavDistance distance;
+    bool has_estimated_time_of_arrival;
+    char estimated_time_of_arrival[128];
+    bool has_time_to_arrival_seconds;
+    int64_t time_to_arrival_seconds;
+} aap_NavDestinationDistance;
+
+typedef struct _aap_NavigationPosition {
+    bool has_step_distance;
+    aap_NavStepDistance step_distance;
+    pb_size_t destinations_count;
+    aap_NavDestinationDistance destinations[2];
+    bool has_current_road;
+    aap_NavText current_road;
+} aap_NavigationPosition;
+
+typedef struct _aap_NavigationTurn {
+    bool has_road_name;
+    char road_name[128];
+    bool has_maneuver_type;
+    uint32_t maneuver_type;
+    bool has_turn_direction;
+    uint32_t turn_direction;
+    /* Legacy icon field 4 is intentionally skipped. */
+    bool has_distance_meters;
+    int32_t distance_meters;
+    bool has_distance_unit;
+    int32_t distance_unit;
+} aap_NavigationTurn;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -331,8 +488,9 @@ extern "C" {
 #define aap_InputChannel_init_default            {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_default}
 #define aap_Sensor_init_default                  {0}
 #define aap_SensorChannel_init_default           {0, {aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default}}
-#define aap_Channel_init_default                 {0, false, aap_SensorChannel_init_default, false, aap_AVChannel_init_default, false, aap_InputChannel_init_default, false, aap_AVInput_init_default, false, aap_Empty_init_default}
-#define aap_Discovery_init_default               {0, {aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default}, false, "", false, 0, false, "", false, "", false, "", false, ""}
+#define aap_NavigationChannel_init_default       {0, 0}
+#define aap_Channel_init_default                 {0, false, aap_SensorChannel_init_default, false, aap_AVChannel_init_default, false, aap_InputChannel_init_default, false, aap_AVInput_init_default, false, aap_NavigationChannel_init_default, false, aap_Empty_init_default, false, aap_Empty_init_default}
+#define aap_Discovery_init_default               {0, {aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default}, false, "", false, 0, false, "", false, "", false, "", false, ""}
 #define aap_SetupRequest_init_default            {0}
 #define aap_SetupResponse_init_default           {0, false, 0, 0, {0}}
 #define aap_Start_init_default                   {0, 0}
@@ -361,6 +519,25 @@ extern "C" {
 #define aap_CallAvailability_init_default        {false, 0}
 #define aap_MediaStatus_init_default             {false, 0, false, "", false, 0, false, 0, false, 0, false, 0}
 #define aap_MediaMetadata_init_default           {false, "", false, "", false, ""}
+#define aap_PhoneCall_init_default               {0, 0, false, "", false, "", false, ""}
+#define aap_PhoneStatus_init_default             {0, {aap_PhoneCall_init_default, aap_PhoneCall_init_default, aap_PhoneCall_init_default, aap_PhoneCall_init_default}, false, 0}
+#define aap_PhoneInputType_init_default          {0}
+#define aap_PhoneInput_init_default              {aap_PhoneInputType_init_default, false, "", false, ""}
+#define aap_NavigationState_init_default         {false, 0}
+#define aap_NavManeuver_init_default             {false, 0, false, 0, false, 0}
+#define aap_NavText_init_default                 {false, ""}
+#define aap_NavDirection_init_default            {false, 0, false, 0}
+#define aap_NavLane_init_default                 {0, {aap_NavDirection_init_default, aap_NavDirection_init_default, aap_NavDirection_init_default}}
+#define aap_NavRoadInfo_init_default             {0, {"", "", ""}}
+#define aap_NavStep_init_default                 {false, aap_NavManeuver_init_default, false, aap_NavText_init_default, 0, {aap_NavLane_init_default, aap_NavLane_init_default, aap_NavLane_init_default, aap_NavLane_init_default, aap_NavLane_init_default, aap_NavLane_init_default}, false, aap_NavRoadInfo_init_default}
+#define aap_NavChargingStation_init_default      {false, 0, false, 0, false, 0}
+#define aap_NavDestination_init_default          {false, "", false, aap_NavChargingStation_init_default}
+#define aap_NavigationNotification_init_default  {0, {aap_NavStep_init_default, aap_NavStep_init_default, aap_NavStep_init_default, aap_NavStep_init_default}, 0, {aap_NavDestination_init_default, aap_NavDestination_init_default}}
+#define aap_NavDistance_init_default             {false, 0, false, "", false, 0}
+#define aap_NavStepDistance_init_default         {false, aap_NavDistance_init_default, false, 0}
+#define aap_NavDestinationDistance_init_default  {false, aap_NavDistance_init_default, false, "", false, 0}
+#define aap_NavigationPosition_init_default      {false, aap_NavStepDistance_init_default, 0, {aap_NavDestinationDistance_init_default, aap_NavDestinationDistance_init_default}, false, aap_NavText_init_default}
+#define aap_NavigationTurn_init_default          {false, "", false, 0, false, 0, false, 0, false, 0}
 #define aap_Empty_init_zero                      {0}
 #define aap_Status_init_zero                     {0}
 #define aap_ChannelOpen_init_zero                {0, 0}
@@ -374,8 +551,9 @@ extern "C" {
 #define aap_InputChannel_init_zero               {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_zero}
 #define aap_Sensor_init_zero                     {0}
 #define aap_SensorChannel_init_zero              {0, {aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero}}
-#define aap_Channel_init_zero                    {0, false, aap_SensorChannel_init_zero, false, aap_AVChannel_init_zero, false, aap_InputChannel_init_zero, false, aap_AVInput_init_zero, false, aap_Empty_init_zero}
-#define aap_Discovery_init_zero                  {0, {aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero}, false, "", false, 0, false, "", false, "", false, "", false, ""}
+#define aap_NavigationChannel_init_zero          {0, 0}
+#define aap_Channel_init_zero                    {0, false, aap_SensorChannel_init_zero, false, aap_AVChannel_init_zero, false, aap_InputChannel_init_zero, false, aap_AVInput_init_zero, false, aap_NavigationChannel_init_zero, false, aap_Empty_init_zero, false, aap_Empty_init_zero}
+#define aap_Discovery_init_zero                  {0, {aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero}, false, "", false, 0, false, "", false, "", false, "", false, ""}
 #define aap_SetupRequest_init_zero               {0}
 #define aap_SetupResponse_init_zero              {0, false, 0, 0, {0}}
 #define aap_Start_init_zero                      {0, 0}
@@ -404,6 +582,25 @@ extern "C" {
 #define aap_CallAvailability_init_zero           {false, 0}
 #define aap_MediaStatus_init_zero                {false, 0, false, "", false, 0, false, 0, false, 0, false, 0}
 #define aap_MediaMetadata_init_zero              {false, "", false, "", false, ""}
+#define aap_PhoneCall_init_zero                  {0, 0, false, "", false, "", false, ""}
+#define aap_PhoneStatus_init_zero                {0, {aap_PhoneCall_init_zero, aap_PhoneCall_init_zero, aap_PhoneCall_init_zero, aap_PhoneCall_init_zero}, false, 0}
+#define aap_PhoneInputType_init_zero             {0}
+#define aap_PhoneInput_init_zero                 {aap_PhoneInputType_init_zero, false, "", false, ""}
+#define aap_NavigationState_init_zero            {false, 0}
+#define aap_NavManeuver_init_zero                {false, 0, false, 0, false, 0}
+#define aap_NavText_init_zero                    {false, ""}
+#define aap_NavDirection_init_zero               {false, 0, false, 0}
+#define aap_NavLane_init_zero                    {0, {aap_NavDirection_init_zero, aap_NavDirection_init_zero, aap_NavDirection_init_zero}}
+#define aap_NavRoadInfo_init_zero                {0, {"", "", ""}}
+#define aap_NavStep_init_zero                    {false, aap_NavManeuver_init_zero, false, aap_NavText_init_zero, 0, {aap_NavLane_init_zero, aap_NavLane_init_zero, aap_NavLane_init_zero, aap_NavLane_init_zero, aap_NavLane_init_zero, aap_NavLane_init_zero}, false, aap_NavRoadInfo_init_zero}
+#define aap_NavChargingStation_init_zero         {false, 0, false, 0, false, 0}
+#define aap_NavDestination_init_zero             {false, "", false, aap_NavChargingStation_init_zero}
+#define aap_NavigationNotification_init_zero     {0, {aap_NavStep_init_zero, aap_NavStep_init_zero, aap_NavStep_init_zero, aap_NavStep_init_zero}, 0, {aap_NavDestination_init_zero, aap_NavDestination_init_zero}}
+#define aap_NavDistance_init_zero                {false, 0, false, "", false, 0}
+#define aap_NavStepDistance_init_zero            {false, aap_NavDistance_init_zero, false, 0}
+#define aap_NavDestinationDistance_init_zero     {false, aap_NavDistance_init_zero, false, "", false, 0}
+#define aap_NavigationPosition_init_zero         {false, aap_NavStepDistance_init_zero, 0, {aap_NavDestinationDistance_init_zero, aap_NavDestinationDistance_init_zero}, false, aap_NavText_init_zero}
+#define aap_NavigationTurn_init_zero             {false, "", false, 0, false, 0, false, 0, false, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define aap_Status_status_tag                    1
@@ -432,12 +629,16 @@ extern "C" {
 #define aap_InputChannel_touchscreen_tag         2
 #define aap_Sensor_type_tag                      1
 #define aap_SensorChannel_sensors_tag            1
+#define aap_NavigationChannel_minimum_interval_ms_tag 1
+#define aap_NavigationChannel_type_tag           2
 #define aap_Channel_channel_id_tag               1
 #define aap_Channel_sensor_tag                   2
 #define aap_Channel_av_tag                       3
 #define aap_Channel_input_tag                    4
 #define aap_Channel_av_input_tag                 5
+#define aap_Channel_navigation_tag               8
 #define aap_Channel_media_info_tag               9
+#define aap_Channel_phone_tag                    10
 #define aap_Discovery_channels_tag               1
 #define aap_Discovery_head_unit_name_tag         2
 #define aap_Discovery_driver_position_tag        6
@@ -506,6 +707,53 @@ extern "C" {
 #define aap_MediaMetadata_title_tag              1
 #define aap_MediaMetadata_artist_tag             2
 #define aap_MediaMetadata_album_tag              3
+#define aap_PhoneCall_state_tag                  1
+#define aap_PhoneCall_duration_seconds_tag       2
+#define aap_PhoneCall_number_tag                 3
+#define aap_PhoneCall_display_name_tag           4
+#define aap_PhoneCall_contact_id_tag             5
+#define aap_PhoneStatus_calls_tag                1
+#define aap_PhoneStatus_signal_strength_tag      2
+#define aap_PhoneInputType_action_tag            1
+#define aap_PhoneInput_input_type_tag            1
+#define aap_PhoneInput_caller_id_tag             2
+#define aap_PhoneInput_display_name_tag          3
+#define aap_NavigationState_state_tag            1
+#define aap_NavManeuver_type_tag                 1
+#define aap_NavManeuver_exit_number_tag          2
+#define aap_NavManeuver_turn_angle_tag           3
+#define aap_NavText_text_tag                     1
+#define aap_NavDirection_shape_tag               1
+#define aap_NavDirection_recommended_tag         2
+#define aap_NavLane_directions_tag               1
+#define aap_NavRoadInfo_road_names_tag           1
+#define aap_NavStep_maneuver_tag                 1
+#define aap_NavStep_instruction_tag              2
+#define aap_NavStep_lanes_tag                    3
+#define aap_NavStep_road_info_tag                4
+#define aap_NavChargingStation_connector_count_tag 1
+#define aap_NavChargingStation_available_count_tag 2
+#define aap_NavChargingStation_max_power_kw_tag  3
+#define aap_NavDestination_address_tag           1
+#define aap_NavDestination_charging_station_tag  2
+#define aap_NavigationNotification_steps_tag     1
+#define aap_NavigationNotification_destinations_tag 2
+#define aap_NavDistance_value_tag                1
+#define aap_NavDistance_display_text_tag         2
+#define aap_NavDistance_unit_tag                 3
+#define aap_NavStepDistance_distance_tag         1
+#define aap_NavStepDistance_time_to_step_seconds_tag 2
+#define aap_NavDestinationDistance_distance_tag  1
+#define aap_NavDestinationDistance_estimated_time_of_arrival_tag 2
+#define aap_NavDestinationDistance_time_to_arrival_seconds_tag 3
+#define aap_NavigationPosition_step_distance_tag 1
+#define aap_NavigationPosition_destinations_tag  2
+#define aap_NavigationPosition_current_road_tag  3
+#define aap_NavigationTurn_road_name_tag         1
+#define aap_NavigationTurn_maneuver_type_tag     2
+#define aap_NavigationTurn_turn_direction_tag    3
+#define aap_NavigationTurn_distance_meters_tag   5
+#define aap_NavigationTurn_distance_unit_tag     6
 
 /* Struct field encoding specification for nanopb */
 #define aap_Empty_FIELDLIST(X, a) \
@@ -592,20 +840,30 @@ X(a, STATIC,   REPEATED, MESSAGE,  sensors,           1)
 #define aap_SensorChannel_DEFAULT NULL
 #define aap_SensorChannel_sensors_MSGTYPE aap_Sensor
 
+#define aap_NavigationChannel_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, INT32,    minimum_interval_ms,   1) \
+X(a, STATIC,   REQUIRED, UINT32,   type,              2)
+#define aap_NavigationChannel_CALLBACK NULL
+#define aap_NavigationChannel_DEFAULT NULL
+
 #define aap_Channel_FIELDLIST(X, a) \
 X(a, STATIC,   REQUIRED, INT32,    channel_id,        1) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  sensor,            2) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  av,                3) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  input,             4) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  av_input,          5) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  media_info,        9)
+X(a, STATIC,   OPTIONAL, MESSAGE,  navigation,        8) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  media_info,        9) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  phone,            10)
 #define aap_Channel_CALLBACK NULL
 #define aap_Channel_DEFAULT NULL
 #define aap_Channel_sensor_MSGTYPE aap_SensorChannel
 #define aap_Channel_av_MSGTYPE aap_AVChannel
 #define aap_Channel_input_MSGTYPE aap_InputChannel
 #define aap_Channel_av_input_MSGTYPE aap_AVInput
+#define aap_Channel_navigation_MSGTYPE aap_NavigationChannel
 #define aap_Channel_media_info_MSGTYPE aap_Empty
+#define aap_Channel_phone_MSGTYPE aap_Empty
 
 #define aap_Discovery_FIELDLIST(X, a) \
 X(a, STATIC,   REPEATED, MESSAGE,  channels,          1) \
@@ -800,6 +1058,144 @@ X(a, STATIC,   OPTIONAL, STRING,   album,             3)
 #define aap_MediaMetadata_CALLBACK NULL
 #define aap_MediaMetadata_DEFAULT NULL
 
+#define aap_PhoneCall_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, UINT32,   state,             1) \
+X(a, STATIC,   REQUIRED, UINT32,   duration_seconds,   2) \
+X(a, STATIC,   OPTIONAL, STRING,   number,            3) \
+X(a, STATIC,   OPTIONAL, STRING,   display_name,      4) \
+X(a, STATIC,   OPTIONAL, STRING,   contact_id,        5)
+#define aap_PhoneCall_CALLBACK NULL
+#define aap_PhoneCall_DEFAULT NULL
+
+#define aap_PhoneStatus_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, MESSAGE,  calls,             1) \
+X(a, STATIC,   OPTIONAL, UINT32,   signal_strength,   2)
+#define aap_PhoneStatus_CALLBACK NULL
+#define aap_PhoneStatus_DEFAULT NULL
+#define aap_PhoneStatus_calls_MSGTYPE aap_PhoneCall
+
+#define aap_PhoneInputType_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, UINT32,   action,            1)
+#define aap_PhoneInputType_CALLBACK NULL
+#define aap_PhoneInputType_DEFAULT NULL
+
+#define aap_PhoneInput_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, MESSAGE,  input_type,        1) \
+X(a, STATIC,   OPTIONAL, STRING,   caller_id,         2) \
+X(a, STATIC,   OPTIONAL, STRING,   display_name,      3)
+#define aap_PhoneInput_CALLBACK NULL
+#define aap_PhoneInput_DEFAULT NULL
+#define aap_PhoneInput_input_type_MSGTYPE aap_PhoneInputType
+
+#define aap_NavigationState_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   state,             1)
+#define aap_NavigationState_CALLBACK NULL
+#define aap_NavigationState_DEFAULT NULL
+
+#define aap_NavManeuver_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   type,              1) \
+X(a, STATIC,   OPTIONAL, INT32,    exit_number,       2) \
+X(a, STATIC,   OPTIONAL, INT32,    turn_angle,        3)
+#define aap_NavManeuver_CALLBACK NULL
+#define aap_NavManeuver_DEFAULT NULL
+
+#define aap_NavText_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, STRING,   text,              1)
+#define aap_NavText_CALLBACK NULL
+#define aap_NavText_DEFAULT NULL
+
+#define aap_NavDirection_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   shape,             1) \
+X(a, STATIC,   OPTIONAL, BOOL,     recommended,       2)
+#define aap_NavDirection_CALLBACK NULL
+#define aap_NavDirection_DEFAULT NULL
+
+#define aap_NavLane_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, MESSAGE,  directions,        1)
+#define aap_NavLane_CALLBACK NULL
+#define aap_NavLane_DEFAULT NULL
+#define aap_NavLane_directions_MSGTYPE aap_NavDirection
+
+#define aap_NavRoadInfo_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, STRING,   road_names,        1)
+#define aap_NavRoadInfo_CALLBACK NULL
+#define aap_NavRoadInfo_DEFAULT NULL
+
+#define aap_NavStep_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  maneuver,          1) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  instruction,       2) \
+X(a, STATIC,   REPEATED, MESSAGE,  lanes,             3) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  road_info,         4)
+#define aap_NavStep_CALLBACK NULL
+#define aap_NavStep_DEFAULT NULL
+#define aap_NavStep_maneuver_MSGTYPE aap_NavManeuver
+#define aap_NavStep_instruction_MSGTYPE aap_NavText
+#define aap_NavStep_lanes_MSGTYPE aap_NavLane
+#define aap_NavStep_road_info_MSGTYPE aap_NavRoadInfo
+
+#define aap_NavChargingStation_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, INT32,    connector_count,   1) \
+X(a, STATIC,   OPTIONAL, INT32,    available_count,   2) \
+X(a, STATIC,   OPTIONAL, INT32,    max_power_kw,      3)
+#define aap_NavChargingStation_CALLBACK NULL
+#define aap_NavChargingStation_DEFAULT NULL
+
+#define aap_NavDestination_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, STRING,   address,           1) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  charging_station,   2)
+#define aap_NavDestination_CALLBACK NULL
+#define aap_NavDestination_DEFAULT NULL
+#define aap_NavDestination_charging_station_MSGTYPE aap_NavChargingStation
+
+#define aap_NavigationNotification_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, MESSAGE,  steps,             1) \
+X(a, STATIC,   REPEATED, MESSAGE,  destinations,      2)
+#define aap_NavigationNotification_CALLBACK NULL
+#define aap_NavigationNotification_DEFAULT NULL
+#define aap_NavigationNotification_steps_MSGTYPE aap_NavStep
+#define aap_NavigationNotification_destinations_MSGTYPE aap_NavDestination
+
+#define aap_NavDistance_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, INT32,    value,             1) \
+X(a, STATIC,   OPTIONAL, STRING,   display_text,      2) \
+X(a, STATIC,   OPTIONAL, UINT32,   unit,              3)
+#define aap_NavDistance_CALLBACK NULL
+#define aap_NavDistance_DEFAULT NULL
+
+#define aap_NavStepDistance_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  distance,          1) \
+X(a, STATIC,   OPTIONAL, INT64,    time_to_step_seconds,   2)
+#define aap_NavStepDistance_CALLBACK NULL
+#define aap_NavStepDistance_DEFAULT NULL
+#define aap_NavStepDistance_distance_MSGTYPE aap_NavDistance
+
+#define aap_NavDestinationDistance_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  distance,          1) \
+X(a, STATIC,   OPTIONAL, STRING,   estimated_time_of_arrival,   2) \
+X(a, STATIC,   OPTIONAL, INT64,    time_to_arrival_seconds,   3)
+#define aap_NavDestinationDistance_CALLBACK NULL
+#define aap_NavDestinationDistance_DEFAULT NULL
+#define aap_NavDestinationDistance_distance_MSGTYPE aap_NavDistance
+
+#define aap_NavigationPosition_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  step_distance,     1) \
+X(a, STATIC,   REPEATED, MESSAGE,  destinations,      2) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  current_road,      3)
+#define aap_NavigationPosition_CALLBACK NULL
+#define aap_NavigationPosition_DEFAULT NULL
+#define aap_NavigationPosition_step_distance_MSGTYPE aap_NavStepDistance
+#define aap_NavigationPosition_destinations_MSGTYPE aap_NavDestinationDistance
+#define aap_NavigationPosition_current_road_MSGTYPE aap_NavText
+
+#define aap_NavigationTurn_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, STRING,   road_name,         1) \
+X(a, STATIC,   OPTIONAL, UINT32,   maneuver_type,     2) \
+X(a, STATIC,   OPTIONAL, UINT32,   turn_direction,    3) \
+X(a, STATIC,   OPTIONAL, INT32,    distance_meters,   5) \
+X(a, STATIC,   OPTIONAL, INT32,    distance_unit,     6)
+#define aap_NavigationTurn_CALLBACK NULL
+#define aap_NavigationTurn_DEFAULT NULL
+
 extern const pb_msgdesc_t aap_Empty_msg;
 extern const pb_msgdesc_t aap_Status_msg;
 extern const pb_msgdesc_t aap_ChannelOpen_msg;
@@ -813,6 +1209,7 @@ extern const pb_msgdesc_t aap_TouchScreen_msg;
 extern const pb_msgdesc_t aap_InputChannel_msg;
 extern const pb_msgdesc_t aap_Sensor_msg;
 extern const pb_msgdesc_t aap_SensorChannel_msg;
+extern const pb_msgdesc_t aap_NavigationChannel_msg;
 extern const pb_msgdesc_t aap_Channel_msg;
 extern const pb_msgdesc_t aap_Discovery_msg;
 extern const pb_msgdesc_t aap_SetupRequest_msg;
@@ -843,6 +1240,25 @@ extern const pb_msgdesc_t aap_BatteryStatus_msg;
 extern const pb_msgdesc_t aap_CallAvailability_msg;
 extern const pb_msgdesc_t aap_MediaStatus_msg;
 extern const pb_msgdesc_t aap_MediaMetadata_msg;
+extern const pb_msgdesc_t aap_PhoneCall_msg;
+extern const pb_msgdesc_t aap_PhoneStatus_msg;
+extern const pb_msgdesc_t aap_PhoneInputType_msg;
+extern const pb_msgdesc_t aap_PhoneInput_msg;
+extern const pb_msgdesc_t aap_NavigationState_msg;
+extern const pb_msgdesc_t aap_NavManeuver_msg;
+extern const pb_msgdesc_t aap_NavText_msg;
+extern const pb_msgdesc_t aap_NavDirection_msg;
+extern const pb_msgdesc_t aap_NavLane_msg;
+extern const pb_msgdesc_t aap_NavRoadInfo_msg;
+extern const pb_msgdesc_t aap_NavStep_msg;
+extern const pb_msgdesc_t aap_NavChargingStation_msg;
+extern const pb_msgdesc_t aap_NavDestination_msg;
+extern const pb_msgdesc_t aap_NavigationNotification_msg;
+extern const pb_msgdesc_t aap_NavDistance_msg;
+extern const pb_msgdesc_t aap_NavStepDistance_msg;
+extern const pb_msgdesc_t aap_NavDestinationDistance_msg;
+extern const pb_msgdesc_t aap_NavigationPosition_msg;
+extern const pb_msgdesc_t aap_NavigationTurn_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define aap_Empty_fields &aap_Empty_msg
@@ -858,6 +1274,7 @@ extern const pb_msgdesc_t aap_MediaMetadata_msg;
 #define aap_InputChannel_fields &aap_InputChannel_msg
 #define aap_Sensor_fields &aap_Sensor_msg
 #define aap_SensorChannel_fields &aap_SensorChannel_msg
+#define aap_NavigationChannel_fields &aap_NavigationChannel_msg
 #define aap_Channel_fields &aap_Channel_msg
 #define aap_Discovery_fields &aap_Discovery_msg
 #define aap_SetupRequest_fields &aap_SetupRequest_msg
@@ -888,6 +1305,25 @@ extern const pb_msgdesc_t aap_MediaMetadata_msg;
 #define aap_CallAvailability_fields &aap_CallAvailability_msg
 #define aap_MediaStatus_fields &aap_MediaStatus_msg
 #define aap_MediaMetadata_fields &aap_MediaMetadata_msg
+#define aap_PhoneCall_fields &aap_PhoneCall_msg
+#define aap_PhoneStatus_fields &aap_PhoneStatus_msg
+#define aap_PhoneInputType_fields &aap_PhoneInputType_msg
+#define aap_PhoneInput_fields &aap_PhoneInput_msg
+#define aap_NavigationState_fields &aap_NavigationState_msg
+#define aap_NavManeuver_fields &aap_NavManeuver_msg
+#define aap_NavText_fields &aap_NavText_msg
+#define aap_NavDirection_fields &aap_NavDirection_msg
+#define aap_NavLane_fields &aap_NavLane_msg
+#define aap_NavRoadInfo_fields &aap_NavRoadInfo_msg
+#define aap_NavStep_fields &aap_NavStep_msg
+#define aap_NavChargingStation_fields &aap_NavChargingStation_msg
+#define aap_NavDestination_fields &aap_NavDestination_msg
+#define aap_NavigationNotification_fields &aap_NavigationNotification_msg
+#define aap_NavDistance_fields &aap_NavDistance_msg
+#define aap_NavStepDistance_fields &aap_NavStepDistance_msg
+#define aap_NavDestinationDistance_fields &aap_NavDestinationDistance_msg
+#define aap_NavigationPosition_fields &aap_NavigationPosition_msg
+#define aap_NavigationTurn_fields &aap_NavigationTurn_msg
 
 /* Maximum encoded size of messages (where known) */
 #define AAP_AAP_PB_H_MAX_SIZE                    aap_Discovery_size
@@ -901,8 +1337,8 @@ extern const pb_msgdesc_t aap_MediaMetadata_msg;
 #define aap_Buttons_size                         19
 #define aap_CallAvailability_size                2
 #define aap_ChannelOpen_size                     17
-#define aap_Channel_size                         390
-#define aap_Discovery_size                       3635
+#define aap_Channel_size                         411
+#define aap_Discovery_size                       4631
 #define aap_Driving_size                         6
 #define aap_Empty_size                           0
 #define aap_FocusRequest_size                    6
@@ -913,8 +1349,28 @@ extern const pb_msgdesc_t aap_MediaMetadata_msg;
 #define aap_MediaStatus_size                     276
 #define aap_MicOpen_size                         17
 #define aap_MicResponse_size                     22
+#define aap_NavChargingStation_size              33
+#define aap_NavDestinationDistance_size          291
+#define aap_NavDestination_size                  165
+#define aap_NavDirection_size                    8
+#define aap_NavDistance_size                     147
+#define aap_NavLane_size                         30
+#define aap_NavManeuver_size                     28
+#define aap_NavRoadInfo_size                     390
+#define aap_NavStepDistance_size                 161
+#define aap_NavStep_size                         748
+#define aap_NavText_size                         130
+#define aap_NavigationChannel_size               17
 #define aap_NavigationFocus_size                 6
+#define aap_NavigationNotification_size          3340
+#define aap_NavigationPosition_size              885
+#define aap_NavigationState_size                 6
+#define aap_NavigationTurn_size                  164
 #define aap_Night_size                           2
+#define aap_PhoneCall_size                       402
+#define aap_PhoneInputType_size                  6
+#define aap_PhoneInput_size                      268
+#define aap_PhoneStatus_size                     1626
 #define aap_Ping_size                            11
 #define aap_RelativeInput_size                   17
 #define aap_RelativeInputs_size                  20

@@ -31,6 +31,15 @@ typedef struct
     unsigned media_statuses, metadata_updates, info_resets;
     rtaa_media_status media_status;
     rtaa_media_metadata metadata;
+    bool status_services;
+    unsigned phone_updates, phone_resets, nav_states, nav_notifications, nav_positions, nav_turns,
+        nav_resets;
+    size_t calls_count, nav_steps, nav_destinations;
+    uint32_t call_state, nav_state, lane_shape;
+    bool state_present, signal_present, instruction_present, distance_present, eta_present;
+    int32_t distance_value;
+    int64_t eta_seconds;
+    char status_text[128];
 } fixture;
 static uint64_t milliseconds(void *ctx)
 {
@@ -155,6 +164,98 @@ static void media_info_reset(void *ctx)
     ++f->info_resets;
     memset(&f->media_status, 0, sizeof(f->media_status));
     memset(&f->metadata, 0, sizeof(f->metadata));
+}
+static int phone_status(void *ctx, const rtaa_phone_status *v)
+{
+    fixture *f = ctx;
+    ++f->phone_updates;
+    f->calls_count = v->calls_count;
+    f->signal_present = v->has_signal_strength;
+    if (v->calls_count)
+    {
+        f->call_state = v->calls[0].state;
+        assert(v->calls[0].number && !strcmp(v->calls[0].number, "+123"));
+        assert(v->calls[0].display_name && !v->calls[0].display_name[0]);
+        assert(!v->calls[0].contact_id && v->calls[0].duration_seconds == 0);
+    }
+    return f->reject ? RTAA_EIO : 0;
+}
+static void phone_reset(void *ctx)
+{
+    fixture *f = ctx;
+    ++f->phone_resets;
+    f->calls_count = 0;
+}
+static int nav_state(void *ctx, const rtaa_navigation_state *v)
+{
+    fixture *f = ctx;
+    ++f->nav_states;
+    f->state_present = v->has_state;
+    f->nav_state = v->state;
+    return f->reject ? RTAA_EIO : 0;
+}
+static int nav_notification(void *ctx, const rtaa_navigation_notification *v)
+{
+    fixture *f = ctx;
+    ++f->nav_notifications;
+    f->nav_steps = v->steps_count;
+    f->nav_destinations = v->destinations_count;
+    if (v->steps_count)
+    {
+        const rtaa_nav_step *s = &v->steps[0];
+        assert(s->has_maneuver && s->maneuver.has_type && s->maneuver.type == 7);
+        assert(s->maneuver.has_exit_number && !s->maneuver.exit_number);
+        assert(s->maneuver.has_turn_angle && s->maneuver.turn_angle == -90);
+        f->instruction_present = s->has_instruction;
+        assert(s->instruction);
+        strcpy(f->status_text, s->instruction);
+        assert(s->lanes_count == 1 && s->lanes[0].directions_count == 2);
+        f->lane_shape = s->lanes[0].directions[0].shape;
+        assert(s->lanes[0].directions[0].has_recommended && !s->lanes[0].directions[0].recommended);
+        assert(!s->lanes[0].directions[1].has_shape);
+        assert(s->has_road_info && s->road_names_count == 1 && !strcmp(s->road_names[0], "Road"));
+    }
+    if (v->destinations_count)
+    {
+        const rtaa_nav_destination *d = &v->destinations[0];
+        assert(d->address && !d->address[0] && d->has_charging_station);
+        assert(d->has_connector_count && d->connector_count == 2);
+        assert(d->has_available_count && !d->available_count);
+        assert(d->has_max_power_kw && d->max_power_kw == 50);
+    }
+    return f->reject ? RTAA_EIO : 0;
+}
+static int nav_position(void *ctx, const rtaa_navigation_position *v)
+{
+    fixture *f = ctx;
+    ++f->nav_positions;
+    f->distance_present = v->has_step_distance && v->has_distance;
+    f->distance_value = v->distance.value;
+    if (v->distance.display_text)
+        strcpy(f->status_text, v->distance.display_text);
+    if (v->destinations_count)
+    {
+        f->eta_present = v->destinations[0].has_time_to_arrival;
+        f->eta_seconds = v->destinations[0].time_to_arrival_seconds;
+        assert(v->destinations[0].estimated_time_of_arrival &&
+               !strcmp(v->destinations[0].estimated_time_of_arrival, "12:30"));
+    }
+    return f->reject ? RTAA_EIO : 0;
+}
+static int nav_turn(void *ctx, const rtaa_navigation_turn *v)
+{
+    fixture *f = ctx;
+    ++f->nav_turns;
+    if (v->road_name)
+        strcpy(f->status_text, v->road_name);
+    return f->reject ? RTAA_EIO : 0;
+}
+static void nav_reset(void *ctx)
+{
+    fixture *f = ctx;
+    ++f->nav_resets;
+    f->status_text[0] = 0;
+    f->state_present = false;
 }
 static int from_receiver(void *ctx, const rtaa_frame *frame)
 {
@@ -317,10 +418,18 @@ static void connect_version(fixture *f, rtaa_receiver *r, uint8_t minor)
     aap_Discovery d = aap_Discovery_init_zero;
     pb_istream_t in = pb_istream_from_buffer(f->body, f->body_size);
     assert(pb_decode(&in, aap_Discovery_fields, &d));
-    assert(d.channels_count == (f->info_enabled ? 8 : 7));
+    assert(d.channels_count == 7u + (f->info_enabled ? 1u : 0u) + (f->status_services ? 2u : 0u));
     if (f->info_enabled)
         assert(d.channels[7].channel_id == 155 && d.channels[7].has_media_info &&
                !d.channels[7].has_sensor && !d.channels[7].has_av);
+    if (f->status_services)
+    {
+        unsigned index = f->info_enabled ? 8 : 7;
+        assert(d.channels[index].channel_id == 163 && d.channels[index].has_navigation &&
+               d.channels[index].navigation.type == 1 &&
+               d.channels[index].navigation.minimum_interval_ms == 1500);
+        assert(d.channels[index + 1].channel_id == 229 && d.channels[index + 1].has_phone);
+    }
     assert(d.channels[0].channel_id == 197 &&
            d.channels[0].av.video_configs[0].margin_width == 512);
     assert(rtaa_receiver_state(r) == RTAA_CONNECTED);
@@ -920,6 +1029,188 @@ static void test_media_info(fixture *f)
     rtaa_receiver_destroy(r);
     peer_free(&f->server);
 }
+static rtaa_receiver *create_status_services(fixture *f)
+{
+    rtaa_receiver_config c = configuration(f);
+    c.channels[RTAA_MEDIA_INFO] = (rtaa_channel_config){155, 32768};
+    c.sink.media_status = media_status;
+    c.sink.media_metadata = media_metadata;
+    c.sink.media_info_reset = media_info_reset;
+    c.channels[RTAA_NAVIGATION] = (rtaa_channel_config){163, 32768};
+    c.channels[RTAA_PHONE] = (rtaa_channel_config){229, 32768};
+    c.navigation_interval_ms = 1500;
+    rtaa_receiver *r = NULL;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
+    c.sink.phone_status = phone_status;
+    c.sink.phone_reset = phone_reset;
+    c.sink.navigation_state = nav_state;
+    c.sink.navigation_notification = nav_notification;
+    c.sink.navigation_position = nav_position;
+    c.sink.navigation_turn = nav_turn;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
+    c.sink.navigation_reset = nav_reset;
+    assert(!rtaa_receiver_create(&c, &r));
+    f->status_services = true;
+    f->info_enabled = true;
+    return r;
+}
+static void test_status_services(fixture *f)
+{
+    rtaa_receiver *r = create_status_services(f);
+    connect(f, r);
+    assert(rtaa_receiver_navigation(r, true) == RTAA_ESTATE);
+    assert(rtaa_receiver_phone_input(r, 5, NULL, NULL) == RTAA_ESTATE);
+    open_channel(f, r, 163);
+    open_channel(f, r, 229);
+    assert(!rtaa_receiver_navigation(r, true));
+    drain(f);
+    assert(f->channel == 163 && f->message == 0x8001 && !f->body_size);
+    assert(!rtaa_receiver_navigation(r, true) && !f->writes_size);
+    assert(!rtaa_receiver_navigation(r, false));
+    drain(f);
+    assert(f->message == 0x8002 && !f->body_size);
+    assert(!rtaa_receiver_navigation(r, false) && !f->writes_size);
+    assert(!rtaa_receiver_phone_input(r, 7, "", NULL));
+    drain(f);
+    aap_PhoneInput input = aap_PhoneInput_init_zero;
+    pb_istream_t in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_PhoneInput_fields, &input));
+    assert(f->channel == 229 && f->message == 0x8002 && input.input_type.action == 7 &&
+           input.has_caller_id && !input.caller_id[0] && !input.has_display_name);
+    assert(rtaa_receiver_phone_input(r, 8, NULL, NULL) == RTAA_EINVAL && !f->writes_size);
+    char long_text[129];
+    memset(long_text, 'a', sizeof(long_text) - 1);
+    long_text[128] = 0;
+    assert(rtaa_receiver_phone_input(r, 5, long_text, NULL) == RTAA_EBOUNDS && !f->writes_size);
+    long_text[127] = 0;
+    assert(!rtaa_receiver_phone_input(r, 5, NULL, long_text));
+    drain(f);
+    in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_PhoneInput_fields, &input) && input.has_display_name &&
+           strlen(input.display_name) == 127);
+    /* Required call fields, present empty name, absent contact and skipped photo. */
+    const uint8_t call[] = {0x0a, 15,  8,  4, 16, 0, 26,   4,  '+', '1',
+                            '2',  '3', 34, 0, 50, 1, 0xff, 16, 0};
+    assert(!send_message(f, r, 229, 0x8001, call, sizeof(call)));
+    assert(f->phone_updates == 1 && f->calls_count == 1 && f->call_state == 4 && f->signal_present);
+    assert(!send_message(f, r, 229, 0x8001, NULL, 0));
+    assert(f->phone_updates == 2 && !f->calls_count && !f->signal_present);
+    aap_NavigationState state = {true, 1};
+    assert(!send_proto(f, r, 163, 0x8003, aap_NavigationState_fields, &state));
+    assert(f->nav_states == 1 && f->state_present && f->nav_state == 1);
+    assert(!send_message(f, r, 163, 0x8003, NULL, 0));
+    assert(!f->state_present);
+    aap_NavigationNotification nav = aap_NavigationNotification_init_zero;
+    nav.steps_count = nav.destinations_count = 1;
+    aap_NavStep *step = &nav.steps[0];
+    step->has_maneuver = step->has_instruction = step->has_road_info = true;
+    step->maneuver = (aap_NavManeuver){true, 7, true, 0, true, -90};
+    step->instruction.has_text = true;
+    strcpy(step->instruction.text, "Turn left");
+    step->lanes_count = 1;
+    step->lanes[0].directions_count = 2;
+    step->lanes[0].directions[0] = (aap_NavDirection){true, 4, true, false};
+    step->road_info.road_names_count = 1;
+    strcpy(step->road_info.road_names[0], "Road");
+    nav.destinations[0].has_address = nav.destinations[0].has_charging_station = true;
+    nav.destinations[0].charging_station = (aap_NavChargingStation){true, 2, true, 0, true, 50};
+    assert(!send_proto(f, r, 163, 0x8006, aap_NavigationNotification_fields, &nav));
+    assert(f->nav_notifications == 1 && f->nav_steps == 1 && f->nav_destinations == 1 &&
+           f->instruction_present && f->lane_shape == 4 && !strcmp(f->status_text, "Turn left"));
+    assert(!send_message(f, r, 163, 0x8006, NULL, 0));
+    assert(f->nav_notifications == 2 && !f->nav_steps && !f->nav_destinations);
+    /* Independent upstream captured stationary position: text "0", feet. */
+    const uint8_t stationary[] = {0x0a, 7, 0x0a, 5, 0x12, 1, '0', 0x18, 6};
+    assert(!send_message(f, r, 163, 0x8007, stationary, sizeof(stationary)));
+    assert(f->nav_positions == 1 && f->distance_present && !strcmp(f->status_text, "0"));
+    aap_NavigationPosition position = aap_NavigationPosition_init_zero;
+    position.has_step_distance = position.step_distance.has_distance = true;
+    position.step_distance.distance = (aap_NavDistance){true, 0, true, "0", true, 1};
+    position.step_distance.has_time_to_step_seconds = true;
+    position.step_distance.time_to_step_seconds = INT64_C(5000000000);
+    position.destinations_count = 1;
+    position.destinations[0].has_time_to_arrival_seconds = true;
+    position.destinations[0].time_to_arrival_seconds = INT64_C(5000000001);
+    position.destinations[0].has_estimated_time_of_arrival = true;
+    strcpy(position.destinations[0].estimated_time_of_arrival, "12:30");
+    assert(!send_proto(f, r, 163, 0x8007, aap_NavigationPosition_fields, &position));
+    assert(f->eta_present && f->eta_seconds == INT64_C(5000000001) && !f->distance_value);
+    const uint8_t legacy[] = {0x0a, 1, 'R', 0x22, 1, 0xff, 0x28, 0};
+    assert(!send_message(f, r, 163, 0x8004, legacy, sizeof(legacy)));
+    assert(f->nav_turns == 1 && !strcmp(f->status_text, "R"));
+    assert(!rtaa_receiver_close_channel(r, RTAA_NAVIGATION));
+    drain(f);
+    assert(f->nav_resets == 1 && !f->phone_resets && !f->status_text[0]);
+    open_channel(f, r, 163);
+    assert(!rtaa_receiver_navigation(r, true));
+    drain(f);
+    assert(f->message == 0x8001);
+    assert(!send_message_flags(f, r, 229, 9, NULL, 0, RTAA_CONTROL));
+    assert(f->phone_resets == 1 && rtaa_receiver_state(r) == RTAA_CONNECTED);
+    open_channel(f, r, 229);
+    rtaa_receiver_destroy(r);
+    assert(f->phone_resets == 2 && f->nav_resets == 2);
+    peer_free(&f->server);
+    /* Required fields, enum validation, repeated bounds, direction checks and
+     * malformed nested data must fail before any callback. */
+    const uint8_t bad_required[] = {10, 2, 8, 1};
+    const uint8_t bad_call_state[] = {10, 4, 8, 7, 16, 0};
+    const uint8_t bad_state[] = {8, 4};
+    const uint8_t bad_lane[] = {10, 6, 26, 4, 10, 2, 8, 10};
+    const uint8_t bad_unit[] = {10, 4, 10, 2, 24, 8};
+    const uint8_t too_many_steps[] = {10, 0, 10, 0, 10, 0, 10, 0, 10, 0};
+    const uint8_t too_many_calls[] = {10, 4,  8, 1,  16, 0, 10, 4,  8, 1,  16, 0, 10, 4,  8,
+                                      1,  16, 0, 10, 4,  8, 1,  16, 0, 10, 4,  8, 1,  16, 0};
+    const uint8_t malformed[] = {10, 2, 10};
+    struct
+    {
+        uint8_t id;
+        uint16_t msg;
+        const uint8_t *p;
+        size_t n;
+        int expected;
+    } cases[] = {{229, 0x8001, bad_required, sizeof(bad_required), RTAA_EPROTO},
+                 {229, 0x8001, bad_call_state, sizeof(bad_call_state), RTAA_EPROTO},
+                 {163, 0x8003, bad_state, sizeof(bad_state), RTAA_EPROTO},
+                 {163, 0x8006, bad_lane, sizeof(bad_lane), RTAA_EPROTO},
+                 {163, 0x8007, bad_unit, sizeof(bad_unit), RTAA_EPROTO},
+                 {163, 0x8006, too_many_steps, sizeof(too_many_steps), RTAA_EPROTO},
+                 {229, 0x8001, too_many_calls, sizeof(too_many_calls), RTAA_EPROTO},
+                 {163, 0x8006, malformed, sizeof(malformed), RTAA_EPROTO},
+                 {229, 0x8002, NULL, 0, RTAA_ENOTSUP},
+                 {163, 0x8001, NULL, 0, RTAA_ENOTSUP}};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        r = create_status_services(f);
+        connect(f, r);
+        open_channel(f, r, cases[i].id);
+        assert(send_message(f, r, cases[i].id, cases[i].msg, cases[i].p, cases[i].n) ==
+               cases[i].expected);
+        assert(!f->phone_updates && !f->nav_states && !f->nav_notifications && !f->nav_positions);
+        rtaa_receiver_destroy(r);
+        assert(f->phone_resets + f->nav_resets == 1);
+        peer_free(&f->server);
+    }
+    for (unsigned i = 0; i < 5; ++i)
+    {
+        r = create_status_services(f);
+        connect(f, r);
+        open_channel(f, r, i == 0 ? 229 : 163);
+        const uint16_t messages[] = {0x8001, 0x8003, 0x8004, 0x8006, 0x8007};
+        f->reject = true;
+        assert(send_message(f, r, i == 0 ? 229 : 163, messages[i], NULL, 0) == RTAA_EIO);
+        assert(f->phone_resets + f->nav_resets == 1);
+        rtaa_receiver_destroy(r);
+        peer_free(&f->server);
+    }
+    r = create_status_services(f);
+    connect(f, r);
+    open_channel(f, r, 163);
+    f->write_error = RTAA_EIO;
+    assert(rtaa_receiver_navigation(r, true) == RTAA_EIO && f->nav_resets == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+}
 int main(void)
 {
     fixture *f = calloc(1, sizeof(*f));
@@ -1083,6 +1374,7 @@ int main(void)
     test_fragmented_microphone(f);
     test_configurable_input_and_sensors(f);
     test_media_info(f);
+    test_status_services(f);
     free(f);
     printf("receiver: PASS; core storage=%zu bytes\n", rtaa_receiver_storage_size());
     return 0;

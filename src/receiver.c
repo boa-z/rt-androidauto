@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "rtaa/receiver.h"
+#include "status.h"
 #include "aap.pb.h"
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -25,7 +26,7 @@ struct rtaa_receiver
     uint8_t control_data[65536], plain[RTAA_PLAIN_MAX], wire[RTAA_FRAME_MAX + 8];
     uint8_t message[RTAA_PLAIN_MAX], cipher[RTAA_FRAME_MAX];
     uint64_t stage_time, last_rx, ping_time, ping_token;
-    bool ping_pending, mic_open, night_subscribed, driving_subscribed, closed;
+    bool ping_pending, mic_open, night_subscribed, driving_subscribed, closed, navigation_enabled;
     bool touching;
     uint16_t touch_id, touch_x, touch_y;
     uint32_t bound_keys, pressed_keys;
@@ -65,6 +66,14 @@ static void retire_channel(rtaa_receiver *r, rtaa_role role)
     channel *c = &r->channels[role];
     if (role == RTAA_MEDIA_INFO && c->open)
         r->c.sink.media_info_reset(r->c.sink.ctx);
+    if (role == RTAA_PHONE && c->open)
+        r->c.sink.phone_reset(r->c.sink.ctx);
+    if (role == RTAA_NAVIGATION)
+    {
+        if (c->open)
+            r->c.sink.navigation_reset(r->c.sink.ctx);
+        r->navigation_enabled = false;
+    }
     if (c->streaming && role != RTAA_MIC && r->c.sink.stop)
         r->c.sink.stop(r->c.sink.ctx, role);
     if (role == RTAA_MIC && r->mic_open)
@@ -304,6 +313,15 @@ static int discovery(rtaa_receiver *r)
         }
         else if (i == RTAA_MEDIA_INFO)
             c->has_media_info = true;
+        else if (i == RTAA_PHONE)
+            c->has_phone = true;
+        else if (i == RTAA_NAVIGATION)
+        {
+            c->has_navigation = true;
+            c->navigation.minimum_interval_ms =
+                r->c.navigation_interval_ms ? r->c.navigation_interval_ms : 1000;
+            c->navigation.type = 1;
+        }
     }
     return send_pb(r, 0, 6, aap_Discovery_fields, &d, true, true);
 }
@@ -549,6 +567,8 @@ static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, c
         return RTAA_ESTATE;
     if (role <= RTAA_SPEECH)
         return av_message(r, role, message, p, n);
+    if (role == RTAA_NAVIGATION || role == RTAA_PHONE)
+        return rtaa_status_message(&r->c.sink, role, message, p, n);
     if (role == RTAA_MEDIA_INFO && message == 0x8001)
     {
         aap_MediaStatus v = aap_MediaStatus_init_zero;
@@ -774,7 +794,8 @@ int rtaa_receiver_create(const rtaa_receiver_config *config, rtaa_receiver **out
         config->heartbeat_ms >= config->session_timeout_ms ||
         rtaa_geometry_validate(&config->geometry) || config->geometry.frame_width != 1280 ||
         config->geometry.frame_height != 720 || config->protocol_minor > 7 ||
-        !valid_name(config->name) || (!!config->sink.sensor_start != !!config->sink.sensor_stop) ||
+        config->navigation_interval_ms < 0 || !valid_name(config->name) ||
+        (!!config->sink.sensor_start != !!config->sink.sensor_stop) ||
         !valid_name(config->manufacturer) || !valid_name(config->model))
         return RTAA_EINVAL;
     size_t total = sizeof(rtaa_receiver) + rtaa_tls_storage_size();
@@ -808,6 +829,13 @@ int rtaa_receiver_create(const rtaa_receiver_config *config, rtaa_receiver **out
             return RTAA_EINVAL;
         if (i == RTAA_MEDIA_INFO && (!config->sink.media_status || !config->sink.media_metadata ||
                                      !config->sink.media_info_reset))
+            return RTAA_EINVAL;
+        if (i == RTAA_PHONE && (!config->sink.phone_status || !config->sink.phone_reset))
+            return RTAA_EINVAL;
+        if (i == RTAA_NAVIGATION &&
+            (!config->sink.navigation_state || !config->sink.navigation_notification ||
+             !config->sink.navigation_position || !config->sink.navigation_turn ||
+             !config->sink.navigation_reset))
             return RTAA_EINVAL;
     }
     if (!any || total > config->memory_limit)
@@ -1077,6 +1105,40 @@ int rtaa_receiver_close_channel(rtaa_receiver *r, rtaa_role role)
         return fail(r, rc);
     retire_channel(r, role);
     return RTAA_OK;
+}
+int rtaa_receiver_navigation(rtaa_receiver *r, bool enabled)
+{
+    if (!ready(r, RTAA_NAVIGATION))
+        return RTAA_ESTATE;
+    if (r->navigation_enabled == enabled)
+        return RTAA_OK;
+    aap_Empty v = aap_Empty_init_zero;
+    int rc = send_pb(r, r->c.channels[RTAA_NAVIGATION].id, enabled ? 0x8001 : 0x8002,
+                     aap_Empty_fields, &v, true, false);
+    if (rc)
+        return fail(r, rc);
+    r->navigation_enabled = enabled;
+    return RTAA_OK;
+}
+int rtaa_receiver_phone_input(rtaa_receiver *r, uint32_t action, const char *caller_id,
+                              const char *display_name)
+{
+    if (!ready(r, RTAA_PHONE))
+        return RTAA_ESTATE;
+    if (action > 7)
+        return RTAA_EINVAL;
+    aap_PhoneInput v = aap_PhoneInput_init_zero;
+    if ((caller_id && strlen(caller_id) >= sizeof(v.caller_id)) ||
+        (display_name && strlen(display_name) >= sizeof(v.display_name)))
+        return RTAA_EBOUNDS;
+    v.input_type.action = action;
+    if ((v.has_caller_id = caller_id != NULL))
+        copy_string(v.caller_id, caller_id);
+    if ((v.has_display_name = display_name != NULL))
+        copy_string(v.display_name, display_name);
+    int rc =
+        send_pb(r, r->c.channels[RTAA_PHONE].id, 0x8002, aap_PhoneInput_fields, &v, true, false);
+    return rc ? fail(r, rc) : RTAA_OK;
 }
 int rtaa_receiver_error(const rtaa_receiver *r)
 {

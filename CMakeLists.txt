@@ -31,7 +31,7 @@ else()
   endforeach()
 endif()
 add_library(rtaa STATIC src/framing.c src/aoa.c src/transport.c src/tls_mbedtls.c src/connection.c
-  src/receiver.c generated/aap.pb.c third_party/nanopb/pb_common.c
+  src/receiver.c src/status.c generated/aap.pb.c third_party/nanopb/pb_common.c
   third_party/nanopb/pb_encode.c third_party/nanopb/pb_decode.c)
 target_compile_features(rtaa PUBLIC c_std_11)
 target_include_directories(rtaa PUBLIC include PRIVATE generated third_party/nanopb)

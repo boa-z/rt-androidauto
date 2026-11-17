@@ -10,7 +10,7 @@ Tests link the actual production C sources, nanopb runtime and mbedTLS. USB and 
 | receiver | Actual byte-at-a-time framing through TLS and receiver dispatch, noncanonical service IDs, discovery, all three PCM audio roles, H.264 sink and session ACK, touch/key, night sensor, focus, microphone window/ACK, shutdown, timeout, sink error without false ACK |
 | rtthread | Actual RT-Thread port implementation against a minimal OS seam: 32-bit tick wrap and zeroed allocation/free |
 
-Public headers are also compiled in separate C and C++ translation units. The Python protobuf oracle is supplementary: it compiles unmodified pinned upstream schemas and compares 17 message fixtures against the SDK subset. It does not cover the complete upstream schema or phone interoperability. The format check excludes unmodified third-party and generated code. Regeneration checks use pinned nanopb output byte-for-byte.
+Public headers are also compiled in separate C and C++ translation units. The Python protobuf oracle is supplementary: it compiles unmodified pinned upstream schemas and compares 27 message fixtures against the SDK subset. It does not cover the complete upstream schema or phone interoperability. The format check excludes unmodified third-party and generated code. Regeneration checks use pinned nanopb output byte-for-byte.
 
 ## Reproduction
 

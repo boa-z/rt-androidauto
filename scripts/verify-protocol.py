@@ -37,7 +37,10 @@ for name in ["control/ChannelOpenRequestMessage", "audio/AudioConfigData",
              "control/CallAvailabilityMessage", "input/InputBindingRequestMessage",
              "input/InputChannelConfigData", "input/RelativeInputEventData",
              "media/MediaPlaybackStatusMessage", "media/MediaPlaybackMetadataMessage",
-             "control/ChannelDescriptorData"]:
+             "control/ChannelDescriptorData", "phone/PhoneStatusMessage",
+             "phone/PhoneStatusInputMessage", "navigation/NavigationStateMessage",
+             "navigation/NavigationNotificationMessage", "navigation/NavigationTurnEventMessage",
+             "navigation/InstrumentClusterMessages"]:
     collect("oaa/" + name + ".proto")
 args.output.mkdir(parents=True, exist_ok=True)
 subprocess.run([sys.executable, "-m", "grpc_tools.protoc", "-I", str(args.upstream),
@@ -67,6 +70,23 @@ pairs = [
     (ours.MediaStatus(state=2, source_app="YouTube Music", position_seconds=80, shuffle=False, repeat=False, repeat_one=False), upstream("media.MediaPlaybackStatusMessage", "MediaPlaybackStatus")(playback_state=2, source_app="YouTube Music", position_seconds=80, shuffle=False, repeat=False, repeat_one=False)),
     (ours.MediaMetadata(title="", artist="音乐家", album="Album"), upstream("media.MediaPlaybackMetadataMessage", "MediaPlaybackMetadata")(title="", artist="音乐家", album="Album")),
     (ours.Channel(channel_id=155, media_info=ours.Empty()), upstream("control.ChannelDescriptorData", "ChannelDescriptor")(channel_id=155, media_info_channel=upstream("media.MediaChannelData", "MediaInfoChannel")())),
+]
+phone_module = "phone.PhoneStatusMessage"
+nav_module = "navigation.NavigationNotificationMessage"
+distance_module = "navigation.NavigationTurnEventMessage"
+pairs += [
+    (ours.Channel(channel_id=163, navigation=ours.NavigationChannel(minimum_interval_ms=1500, type=1)), upstream("control.ChannelDescriptorData", "ChannelDescriptor")(channel_id=163, navigation_channel=upstream("navigation.NavigationChannelData", "NavigationChannel")(minimum_interval_ms=1500, type=1))),
+    (ours.Channel(channel_id=229, phone=ours.Empty()), upstream("control.ChannelDescriptorData", "ChannelDescriptor")(channel_id=229, phone_status_channel=upstream("control.ChannelDescriptorData", "PhoneStatusChannel")())),
+    (ours.PhoneStatus(calls=[ours.PhoneCall(state=4, duration_seconds=0, number="+123", display_name="")], signal_strength=0), upstream(phone_module, "PhoneStatusUpdate")(calls=[upstream(phone_module, "PhoneCall")(call_state=4, call_duration_seconds=0, phone_number="+123", display_name="")], signal_strength=0)),
+    (ours.PhoneInput(input_type=ours.PhoneInputType(action=7), caller_id="", display_name="Caller"), upstream("phone.PhoneStatusInputMessage", "PhoneStatusInput")(input_type=upstream("phone.PhoneStatusInputMessage", "PhoneInputType")(action=7), caller_id="", display_name="Caller")),
+    (ours.NavigationState(state=3), upstream("navigation.NavigationStateMessage", "NavigationState")(state=3)),
+    (ours.NavigationNotification(steps=[ours.NavStep(maneuver=ours.NavManeuver(type=7, exit_number=0, turn_angle=-90), instruction=ours.NavText(text="Turn left"), lanes=[ours.NavLane(directions=[ours.NavDirection(shape=4, recommended=False), ours.NavDirection()])], road_info=ours.NavRoadInfo(road_names=["Road"]))], destinations=[ours.NavDestination(address="", charging_station=ours.NavChargingStation(connector_count=2, available_count=0, max_power_kw=50))]),
+     upstream(nav_module, "NavigationNotification")(steps=[upstream(nav_module, "NavigationStep")(maneuver=upstream(nav_module, "NavigationManeuver")(type=7, roundabout_exit_number=0, roundabout_turn_angle=-90), instruction=upstream(nav_module, "NavigationText")(text="Turn left"), lanes=[upstream(nav_module, "NavigationLane")(directions=[upstream(nav_module, "NavigationLaneDirection")(shape=4, is_recommended=False), upstream(nav_module, "NavigationLaneDirection")()])], road_info=upstream(nav_module, "NavigationRoadInfo")(road_names=["Road"]))], destinations=[upstream(nav_module, "NavigationDestination")(address="", charging_station=upstream(nav_module, "ChargingStationDetails")(connector_count=2, available_count=0, max_power_kw=50))])),
+    (ours.NavigationPosition(step_distance=ours.NavStepDistance(distance=ours.NavDistance(value=0, display_text="0", unit=1), time_to_step_seconds=5000000000), destinations=[ours.NavDestinationDistance(estimated_time_of_arrival="12:30", time_to_arrival_seconds=5000000001)], current_road=ours.NavText(text="")),
+     upstream(distance_module, "NavigationNextTurnDistanceEvent")(step_distance=upstream(distance_module, "NavigationStepDistance")(distance=upstream(distance_module, "NavigationTurnDistance")(distance_value=0, display_text="0", distance_unit=1), time_to_step_seconds=5000000000), destination_distances=[upstream(distance_module, "DestinationDistance")(estimated_time_of_arrival="12:30", time_to_arrival_seconds=5000000001)], current_road=upstream(nav_module, "NavigationText")(text=""))),
+    (ours.NavigationTurn(road_name="Road", maneuver_type=7, turn_direction=1, distance_meters=0, distance_unit=1), upstream(distance_module, "NavigationTurnEvent")(road_name="Road", maneuver_type=7, turn_direction=1, distance_meters=0, distance_unit=1)),
+    (ours.Empty(), upstream("navigation.InstrumentClusterMessages", "InstrumentClusterStart")()),
+    (ours.Empty(), upstream("navigation.InstrumentClusterMessages", "InstrumentClusterStop")()),
 ]
 for a, b in pairs:
     assert a.SerializeToString() == b.SerializeToString(), (a, b)
