@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+menuconfig LPKG_USING_RT_ANDROIDAUTO
+    bool "rt-androidauto portable Android Auto receiver (experimental)"
+    default n
+    help
+      C11 AOA/AAP receiver with nanopb and a TLS 1.2 mbedTLS backend.
+      Requires platform transport, trust policy and real media sinks.
+      Phone interoperability and board integration have not been validated.
+
+if LPKG_USING_RT_ANDROIDAUTO
+config RTAA_MBEDTLS_INCLUDE
+    string "mbedTLS 2.28 include directory (relative to SDK root or absolute)"
+    default "packages/third-party/mbedtls/mbedtls-2.28.9/include"
+    help
+      The platform must build and link mbedTLS 2.28 with SSL client,
+      TLS 1.2, X509, SHA256, PK, RSA/ECDHE and an appropriate RNG.
+      The Luban-Lite stock mbedTLS 2.7 package is not yet validated.
+
+config RTAA_PORT_RTTHREAD
+    bool "RT-Thread allocator and monotonic clock port"
+    default y if KERNEL_RTTHREAD
+    depends on KERNEL_RTTHREAD
+endif

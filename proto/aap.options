@@ -1,0 +1,10 @@
+aap.* max_count:8
+aap.* max_size:96
+aap.Discovery.channels max_count:7
+aap.AVChannel.audio_configs max_count:1
+aap.AVChannel.video_configs max_count:1
+aap.SetupResponse.configs max_count:1
+aap.TouchEvent.locations max_count:2
+aap.Buttons.buttons max_count:1
+aap.SensorEvent.night max_count:1
+aap.SensorEvent.driving max_count:1

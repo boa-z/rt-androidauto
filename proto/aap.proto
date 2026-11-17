@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2024-2026 Open Android Auto contributors
+// Based on works by f1x.studio (Michal Szwaj), opencardev, aa-proxy.
+// Bounded C profile adapted from mrmees/open-android-auto at
+// 61eab61c5f9968154ff1a80faa8c0a427b208479. See docs/protocol-compatibility.md.
+syntax = "proto2";
+package aap;
+message Empty {}
+
+message Status { required int32 status = 1; }
+message ChannelOpen { required sint32 priority = 1; required int32 channel_id = 2; }
+message Ping { required int64 timestamp = 1; }
+message Shutdown { required uint32 reason = 1; }
+message AudioConfig {
+  required uint32 sample_rate = 1;
+  required uint32 bit_depth = 2;
+  required uint32 channel_count = 3;
+}
+message VideoConfig {
+  optional uint32 video_resolution = 1;
+  optional uint32 video_fps = 2;
+  optional uint32 margin_width = 3;
+  optional uint32 margin_height = 4;
+  optional uint32 dpi = 5;
+  optional uint32 codec = 10;
+}
+message AVChannel {
+  optional uint32 stream_type = 1;
+  optional uint32 audio_type = 2;
+  repeated AudioConfig audio_configs = 3;
+  repeated VideoConfig video_configs = 4;
+}
+message AVInput { optional uint32 stream_type = 1; optional AudioConfig audio_config = 2; }
+message TouchScreen { required uint32 width = 1; required uint32 height = 2; }
+message InputChannel { repeated uint32 keycodes = 1; optional TouchScreen touchscreen = 2; }
+message Sensor { required uint32 type = 1; }
+message SensorChannel { repeated Sensor sensors = 1; }
+message Channel {
+  required int32 channel_id = 1;
+  optional SensorChannel sensor = 2;
+  optional AVChannel av = 3;
+  optional InputChannel input = 4;
+  optional AVInput av_input = 5;
+}
+message Discovery {
+  repeated Channel channels = 1;
+  optional string head_unit_name = 2;
+  optional uint32 driver_position = 6;
+  optional string manufacturer = 7;
+  optional string model = 8;
+  optional string sw_build = 9;
+  optional string sw_version = 10;
+}
+message SetupRequest { required uint32 codec = 1; }
+message SetupResponse { required uint32 status = 1; optional uint32 max_unacked = 2; repeated uint32 configs = 3; }
+message Start { required int32 session = 1; required uint32 config = 2; }
+message Ack { required int32 session_id = 1; optional uint32 ack_count = 2; repeated uint64 receive_timestamps = 3; }
+message FocusRequest { optional uint32 type = 1; }
+message FocusResponse { required uint32 state = 1; }
+message VideoFocusRequest { optional uint32 mode = 2; optional uint32 reason = 3; }
+message VideoFocus { required uint32 focus = 1; optional bool unrequested = 2; }
+message Binding { repeated uint32 keycodes = 1; }
+message TouchLocation { required uint32 x = 1; required uint32 y = 2; required uint32 pointer_id = 3; }
+message TouchEvent { repeated TouchLocation locations = 1; optional uint32 action_index = 2; optional uint32 action = 3; }
+message Button { required uint32 keycode = 1; required bool pressed = 2; required uint32 meta = 3; optional bool long_press = 4; }
+message Buttons { repeated Button buttons = 1; }
+message InputEvent { required uint64 timestamp = 1; optional TouchEvent touch = 3; optional Buttons button = 4; }
+message SensorStart { required uint32 type = 1; required int64 refresh_interval = 2; }
+message Night { required bool night = 1; }
+message Driving { required uint32 status = 1; }
+message SensorEvent { repeated Night night = 10; repeated Driving driving = 13; }
+message MicOpen { optional bool open = 1; optional bool anc = 2; optional bool ec = 3; optional int32 max_unacked = 4; }
+message MicResponse { optional int32 session = 1; optional int32 value = 2; }

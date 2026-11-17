@@ -1,0 +1,35 @@
+name: SDK host validation
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  host:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Mbed-TLS/mbedtls
+          ref: 5e146adef63b326b04282252639bebc2730939c6
+          path: .deps/mbedtls
+      - uses: actions/checkout@v4
+        with:
+          repository: mrmees/open-android-auto
+          ref: 61eab61c5f9968154ff1a80faa8c0a427b208479
+          path: .deps/oaa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python scripts/check-format.py
+      - run: python scripts/generate-proto.py --check
+      - run: python scripts/verify-protocol.py --upstream .deps/oaa
+      - if: runner.os == 'Linux'
+        run: cmake -S . -B build -DRTAA_MBEDTLS_SOURCE=${{ github.workspace }}/.deps/mbedtls -DRTAA_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+      - if: runner.os == 'Windows'
+        run: cmake -S . -B build -DRTAA_MBEDTLS_SOURCE=${{ github.workspace }}/.deps/mbedtls
+      - run: cmake --build build --config Debug -j 4
+      - run: ctest --test-dir build -C Debug --output-on-failure

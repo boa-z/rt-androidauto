@@ -1,0 +1,798 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+#include "rtaa/receiver.h"
+#include "aap.pb.h"
+#include <pb_decode.h>
+#include <pb_encode.h>
+#include <string.h>
+#include <limits.h>
+
+typedef struct
+{
+    rtaa_assembly assembly;
+    bool open, setup, streaming, bound;
+    int32_t session;
+    uint32_t window, outstanding;
+} channel;
+struct rtaa_receiver
+{
+    rtaa_receiver_config c;
+    rtaa_state state;
+    rtaa_tls *tls;
+    rtaa_parser parser;
+    channel channels[RTAA_ROLE_COUNT];
+    rtaa_assembly control;
+    uint8_t control_data[65536], plain[RTAA_PLAIN_MAX], wire[RTAA_FRAME_MAX + 8];
+    uint8_t message[RTAA_PLAIN_MAX], cipher[RTAA_FRAME_MAX];
+    uint64_t stage_time, last_rx, ping_time, ping_token;
+    bool ping_pending, mic_open, night_subscribed, driving_subscribed, closed;
+    rtaa_statistics stats;
+};
+size_t rtaa_receiver_storage_size(void)
+{
+    return sizeof(rtaa_receiver);
+}
+static uint64_t now(rtaa_receiver *r)
+{
+    return r->c.transport.now_ms(r->c.transport.ctx);
+}
+static int decode(const pb_msgdesc_t *fields, void *out, const uint8_t *data, size_t size)
+{
+    pb_istream_t in = pb_istream_from_buffer(data, size);
+    return pb_decode(&in, fields, out) ? RTAA_OK : RTAA_EPROTO;
+}
+static void transition(rtaa_receiver *r, rtaa_state state, int error)
+{
+    r->state = state;
+    r->stage_time = now(r);
+    if (r->c.sink.state)
+        r->c.sink.state(r->c.sink.ctx, state, error);
+}
+static void retire(rtaa_receiver *r)
+{
+    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+    {
+        channel *c = &r->channels[i];
+        if (c->streaming && i != RTAA_MIC && r->c.sink.stop)
+            r->c.sink.stop(r->c.sink.ctx, (rtaa_role)i);
+        c->open = c->setup = c->streaming = c->bound = false;
+        c->outstanding = 0;
+        rtaa_assembly_reset(&c->assembly);
+    }
+    if (r->mic_open && r->c.sink.microphone)
+        r->c.sink.microphone(r->c.sink.ctx, false, 16000, false, false);
+    r->mic_open = false;
+    if (!r->closed)
+    {
+        if (r->c.transport.cancel)
+            r->c.transport.cancel(r->c.transport.ctx);
+        if (r->c.transport.close)
+            r->c.transport.close(r->c.transport.ctx);
+        r->closed = true;
+    }
+}
+static int fail(rtaa_receiver *r, int rc)
+{
+    if (r->state != RTAA_FAILED && r->state != RTAA_CLOSED)
+    {
+        ++r->stats.errors;
+        retire(r);
+        transition(r, RTAA_FAILED, rc);
+    }
+    return rc;
+}
+static int raw_frame(rtaa_receiver *r, uint8_t id, uint8_t flags, const uint8_t *data, size_t size)
+{
+    rtaa_frame f = {id, flags | RTAA_FIRST | RTAA_LAST, 0, data, size};
+    size_t written;
+    int rc = rtaa_frame_encode(&f, r->wire, sizeof(r->wire), &written);
+    if (!rc)
+        rc = rtaa_write_all(&r->c.transport, r->wire, written, r->c.io_timeout_ms);
+    return rc;
+}
+static int send_body(rtaa_receiver *r, uint8_t id, uint16_t message, const uint8_t *body,
+                     size_t size, bool encrypted, bool control)
+{
+    if (size > sizeof(r->message) - 2)
+        return RTAA_EBOUNDS;
+    r->message[0] = (uint8_t)(message >> 8);
+    r->message[1] = (uint8_t)message;
+    if (size)
+        memcpy(r->message + 2, body, size);
+    size_t n = size + 2;
+    const uint8_t *p = r->message;
+    int rc = 0;
+    if (encrypted)
+    {
+        rc = rtaa_tls_encrypt(r->tls, p, n);
+        if (!rc)
+            rc = rtaa_tls_output(r->tls, r->cipher, sizeof(r->cipher), &n);
+        p = r->cipher;
+    }
+    if (!rc)
+        rc =
+            raw_frame(r, id, (encrypted ? RTAA_ENCRYPTED : 0) | (control ? RTAA_CONTROL : 0), p, n);
+    return rc;
+}
+static int send_pb(rtaa_receiver *r, uint8_t id, uint16_t message, const pb_msgdesc_t *fields,
+                   const void *value, bool encrypted, bool control)
+{
+    uint8_t buffer[4096];
+    pb_ostream_t out = pb_ostream_from_buffer(buffer, sizeof(buffer));
+    if (!pb_encode(&out, fields, value))
+        return RTAA_EBOUNDS;
+    return send_body(r, id, message, buffer, out.bytes_written, encrypted, control);
+}
+static int status(rtaa_receiver *r, uint8_t id, uint16_t message, bool control)
+{
+    aap_Status value = {0};
+    return send_pb(r, id, message, aap_Status_fields, &value, true, control);
+}
+static int handshake(rtaa_receiver *r)
+{
+    int hs = rtaa_tls_handshake(r->tls);
+    if (hs < 0)
+        return hs;
+    size_t n;
+    int rc = rtaa_tls_output(r->tls, r->cipher, sizeof(r->cipher) - 2, &n);
+    if (!rc && n)
+        rc = send_body(r, 0, 3, r->cipher, n, false, true);
+    if (rc)
+        return rc;
+    if (hs == RTAA_OK)
+    {
+        aap_Status auth = {0};
+        rc = send_pb(r, 0, 4, aap_Status_fields, &auth, false, true);
+        if (!rc)
+            transition(r, RTAA_DISCOVERY, 0);
+    }
+    return rc;
+}
+static void audio_format(rtaa_role role, uint32_t *rate, uint8_t *channels)
+{
+    *rate = role == RTAA_MEDIA ? 48000 : 16000;
+    *channels = role == RTAA_MEDIA ? 2 : 1;
+}
+static void copy_string(char *out, const char *in)
+{
+    memcpy(out, in, strlen(in) + 1);
+}
+static int discovery(rtaa_receiver *r)
+{
+    aap_Discovery d = aap_Discovery_init_zero;
+    d.has_head_unit_name = d.has_manufacturer = d.has_model = d.has_sw_version = true;
+    copy_string(d.head_unit_name, r->c.name);
+    copy_string(d.manufacturer, r->c.manufacturer);
+    copy_string(d.model, r->c.model);
+    copy_string(d.sw_version, "0.1.0-dev");
+    d.has_driver_position = true;
+    d.driver_position = 0;
+    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+    {
+        if (!r->c.channels[i].id)
+            continue;
+        aap_Channel *c = &d.channels[d.channels_count++];
+        c->channel_id = r->c.channels[i].id;
+        if (i <= RTAA_SPEECH)
+        {
+            c->has_av = true;
+            c->av.has_stream_type = true;
+            c->av.stream_type = i == RTAA_VIDEO ? 3 : 1;
+            if (i == RTAA_VIDEO)
+            {
+                c->av.video_configs_count = 1;
+                aap_VideoConfig *v = &c->av.video_configs[0];
+                v->has_video_resolution = v->has_video_fps = v->has_margin_width =
+                    v->has_margin_height = v->has_dpi = true;
+                v->video_resolution = 2;
+                v->video_fps = 1;
+                v->margin_width = r->c.geometry.margin_width;
+                v->margin_height = r->c.geometry.margin_height;
+                v->dpi = 160;
+            }
+            else
+            {
+                c->av.has_audio_type = true;
+                c->av.audio_type = i == RTAA_MEDIA ? 3 : i == RTAA_SYSTEM ? 2 : 1;
+                c->av.audio_configs_count = 1;
+                uint32_t rate;
+                uint8_t channels;
+                audio_format((rtaa_role)i, &rate, &channels);
+                c->av.audio_configs[0] = (aap_AudioConfig){rate, 16, channels};
+            }
+        }
+        else if (i == RTAA_MIC)
+        {
+            c->has_av_input = true;
+            c->av_input.has_stream_type = c->av_input.has_audio_config = true;
+            c->av_input.stream_type = 1;
+            c->av_input.audio_config = (aap_AudioConfig){16000, 16, 1};
+        }
+        else if (i == RTAA_INPUT)
+        {
+            static const uint32_t keys[] = {3, 4, 5, 6, 19, 20, 21, 23};
+            c->has_input = true;
+            c->input.has_touchscreen = true;
+            c->input.touchscreen.width = r->c.geometry.frame_width;
+            c->input.touchscreen.height = r->c.geometry.frame_height;
+            c->input.keycodes_count = 8;
+            memcpy(c->input.keycodes, keys, sizeof(keys));
+        }
+        else
+        {
+            c->has_sensor = true;
+            c->sensor.sensors_count = 2;
+            c->sensor.sensors[0].type = 10;
+            c->sensor.sensors[1].type = 13;
+        }
+    }
+    return send_pb(r, 0, 6, aap_Discovery_fields, &d, true, true);
+}
+static int role_by_id(rtaa_receiver *r, uint8_t id)
+{
+    if (!id)
+        return -1;
+    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+        if (r->c.channels[i].id == id)
+            return (int)i;
+    return -1;
+}
+static int control_message(rtaa_receiver *r, uint16_t message, const uint8_t *p, size_t n)
+{
+    if (message == 5)
+    {
+        if (r->state != RTAA_DISCOVERY)
+            return RTAA_ESTATE;
+        /* DiscoveryRequest is an extensible phone identity message. Nanopb
+         * checks unknown fields' wire lengths rather than ignoring raw bytes. */
+        aap_Empty empty = aap_Empty_init_zero;
+        int rc = decode(aap_Empty_fields, &empty, p, n);
+        if (!rc)
+            rc = discovery(r);
+        if (!rc)
+            transition(r, RTAA_CONNECTED, 0);
+        return rc;
+    }
+    if (message == 11 || message == 12)
+    {
+        aap_Ping v = aap_Ping_init_zero;
+        int rc = decode(aap_Ping_fields, &v, p, n);
+        if (rc)
+            return rc;
+        if (message == 11)
+            return send_pb(r, 0, 12, aap_Ping_fields, &v, true, true);
+        if (!r->ping_pending || (uint64_t)v.timestamp != r->ping_token)
+            return RTAA_EPROTO;
+        r->ping_pending = false;
+        return RTAA_OK;
+    }
+    if (message == 7)
+    {
+        if (r->state != RTAA_CONNECTED)
+            return RTAA_ESTATE;
+        aap_ChannelOpen open = aap_ChannelOpen_init_zero;
+        int rc = decode(aap_ChannelOpen_fields, &open, p, n);
+        if (rc || open.channel_id <= 0 || open.channel_id > 255)
+            return RTAA_EPROTO;
+        int role = role_by_id(r, (uint8_t)open.channel_id);
+        if (role < 0 || r->channels[role].open)
+            return RTAA_EPROTO;
+        rc = status(r, (uint8_t)open.channel_id, 8, true);
+        if (!rc)
+            r->channels[role].open = true;
+        return rc;
+    }
+    if (message == 18)
+    {
+        aap_FocusRequest v = aap_FocusRequest_init_zero;
+        int rc = decode(aap_FocusRequest_fields, &v, p, n);
+        if (rc || !v.has_type || v.type < 1 || v.type > 4)
+            return RTAA_EPROTO;
+        if (!r->c.sink.audio_focus)
+            return RTAA_ENOTSUP;
+        int focus = r->c.sink.audio_focus(r->c.sink.ctx, v.type);
+        if (focus < 0)
+            return focus;
+        if (focus < 1 || focus > 7)
+            return RTAA_EINVAL;
+        aap_FocusResponse out = {(uint32_t)focus};
+        return send_pb(r, 0, 19, aap_FocusResponse_fields, &out, true, true);
+    }
+    if (message == 15)
+    {
+        aap_Shutdown v = aap_Shutdown_init_zero;
+        int rc = decode(aap_Shutdown_fields, &v, p, n);
+        if (!rc)
+            rc = send_body(r, 0, 16, NULL, 0, true, true);
+        if (!rc)
+        {
+            retire(r);
+            transition(r, RTAA_CLOSED, 0);
+        }
+        return rc;
+    }
+    if (message == 16 && r->state == RTAA_CLOSING)
+    {
+        aap_Empty empty = aap_Empty_init_zero;
+        if (decode(aap_Empty_fields, &empty, p, n))
+            return RTAA_EPROTO;
+        retire(r);
+        transition(r, RTAA_CLOSED, 0);
+        return RTAA_OK;
+    }
+    return RTAA_ENOTSUP;
+}
+static int av_message(rtaa_receiver *r, rtaa_role role, uint16_t message, const uint8_t *p,
+                      size_t n)
+{
+    channel *c = &r->channels[role];
+    uint8_t id = c->assembly.channel;
+    if (message == 0x8000)
+    {
+        if (c->setup || c->streaming)
+            return RTAA_ESTATE;
+        aap_SetupRequest v = aap_SetupRequest_init_zero;
+        int rc = decode(aap_SetupRequest_fields, &v, p, n);
+        if (rc || v.codec != (role == RTAA_VIDEO ? 3u : 1u))
+            return RTAA_ENOTSUP;
+        aap_SetupResponse out = {2, true, 1, 1, {0}};
+        rc = send_pb(r, id, 0x8003, aap_SetupResponse_fields, &out, true, false);
+        if (!rc)
+            c->setup = true;
+        return rc;
+    }
+    if (message == 0x8001)
+    {
+        if (!c->setup || c->streaming)
+            return RTAA_ESTATE;
+        aap_Start v = aap_Start_init_zero;
+        int rc = decode(aap_Start_fields, &v, p, n);
+        if (rc || v.config != 0)
+            return RTAA_EPROTO;
+        uint32_t rate;
+        uint8_t channels;
+        audio_format(role, &rate, &channels);
+        rc = r->c.sink.start(r->c.sink.ctx, role, role == RTAA_VIDEO ? 0 : rate,
+                             role == RTAA_VIDEO ? 0 : channels, role == RTAA_VIDEO ? 0 : 16);
+        if (!rc)
+        {
+            c->streaming = true;
+            c->session = v.session;
+        }
+        return rc;
+    }
+    if (message == 0x8002)
+    {
+        if (!c->streaming)
+            return RTAA_ESTATE;
+        aap_Empty empty = aap_Empty_init_zero;
+        if (decode(aap_Empty_fields, &empty, p, n))
+            return RTAA_EPROTO;
+        if (r->c.sink.stop)
+            r->c.sink.stop(r->c.sink.ctx, role);
+        c->streaming = false;
+        return RTAA_OK;
+    }
+    if (message == 0x8007 && role == RTAA_VIDEO)
+    {
+        aap_VideoFocusRequest v = aap_VideoFocusRequest_init_zero;
+        int rc = decode(aap_VideoFocusRequest_fields, &v, p, n);
+        if (rc || !v.has_mode || (v.mode != 1 && v.mode != 2))
+            return RTAA_EPROTO;
+        if (!r->c.sink.video_focus)
+            return RTAA_ENOTSUP;
+        rc = r->c.sink.video_focus(r->c.sink.ctx, v.mode == 1);
+        if (rc)
+            return rc;
+        aap_VideoFocus out = {v.mode, true, false};
+        return send_pb(r, id, 0x8008, aap_VideoFocus_fields, &out, true, false);
+    }
+    if (message == 0 || message == 1)
+    {
+        if (!c->streaming)
+            return RTAA_ESTATE;
+        uint64_t timestamp = 0;
+        if (!message)
+        {
+            if (n < 8)
+                return RTAA_EPROTO;
+            for (unsigned i = 0; i < 8; ++i)
+                timestamp = (timestamp << 8) | p[i];
+            p += 8;
+            n -= 8;
+        }
+        if (!n || (role != RTAA_VIDEO && n % (role == RTAA_MEDIA ? 4u : 2u)))
+            return RTAA_EPROTO;
+        int rc = r->c.sink.data(r->c.sink.ctx, role, p, n, timestamp);
+        if (rc)
+            return rc;
+        if (role == RTAA_VIDEO)
+            r->stats.video_bytes += n;
+        else
+            r->stats.audio_bytes += n;
+        aap_Ack ack = aap_Ack_init_zero;
+        ack.session_id = c->session;
+        ack.has_ack_count = true;
+        ack.ack_count = 1;
+        rc = send_pb(r, id, 0x8004, aap_Ack_fields, &ack, true, false);
+        if (!rc)
+            ++r->stats.acks;
+        return rc;
+    }
+    return RTAA_ENOTSUP;
+}
+static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, const uint8_t *p,
+                           size_t n)
+{
+    channel *c = &r->channels[role];
+    uint8_t id = c->assembly.channel;
+    if (!c->open || r->state != RTAA_CONNECTED)
+        return RTAA_ESTATE;
+    if (role <= RTAA_SPEECH)
+        return av_message(r, role, message, p, n);
+    if (role == RTAA_INPUT && message == 0x8002)
+    {
+        aap_Binding v = aap_Binding_init_zero;
+        int rc = decode(aap_Binding_fields, &v, p, n);
+        if (!rc)
+            rc = status(r, id, 0x8003, false);
+        if (!rc)
+            c->bound = true;
+        return rc;
+    }
+    if (role == RTAA_SENSOR && message == 0x8001)
+    {
+        aap_SensorStart v = aap_SensorStart_init_zero;
+        int rc = decode(aap_SensorStart_fields, &v, p, n);
+        if (rc || v.refresh_interval < 0 || (v.type != 10 && v.type != 13))
+            return RTAA_EPROTO;
+        rc = status(r, id, 0x8002, false);
+        if (!rc)
+        {
+            if (v.type == 10)
+                r->night_subscribed = true;
+            else
+                r->driving_subscribed = true;
+        }
+        return rc;
+    }
+    if (role == RTAA_MIC && message == 0x8005)
+    {
+        aap_MicOpen v = aap_MicOpen_init_zero;
+        int rc = decode(aap_MicOpen_fields, &v, p, n);
+        if (rc || !v.has_open ||
+            (v.open && (!v.has_max_unacked || v.max_unacked < 1 || v.max_unacked > 64)))
+            return RTAA_EPROTO;
+        if (!r->c.sink.microphone)
+            return RTAA_ENOTSUP;
+        if (v.open == r->mic_open)
+            return RTAA_ESTATE;
+        rc = r->c.sink.microphone(r->c.sink.ctx, v.open, 16000, v.ec, v.anc);
+        if (rc)
+            return rc;
+        r->mic_open = v.open;
+        c->window = (uint32_t)v.max_unacked;
+        c->outstanding = 0;
+        if (v.open)
+            ++c->session;
+        aap_MicResponse out = {true, c->session, true, 0};
+        return send_pb(r, id, 0x8006, aap_MicResponse_fields, &out, true, false);
+    }
+    if (role == RTAA_MIC && message == 0x8004)
+    {
+        aap_Ack ack = aap_Ack_init_zero;
+        int rc = decode(aap_Ack_fields, &ack, p, n);
+        uint32_t count =
+            ack.receive_timestamps_count ? ack.receive_timestamps_count : ack.ack_count;
+        if (rc || ack.session_id != c->session || !count || count > c->outstanding)
+            return RTAA_EPROTO;
+        c->outstanding -= count;
+        return RTAA_OK;
+    }
+    return RTAA_ENOTSUP;
+}
+static int on_frame(void *ctx, const rtaa_frame *frame)
+{
+    rtaa_receiver *r = ctx;
+    rtaa_frame f = *frame;
+    bool encrypted = (f.flags & RTAA_ENCRYPTED) != 0;
+    if (r->state == RTAA_FAILED || r->state == RTAA_CLOSED)
+        return RTAA_ESTATE;
+    if (encrypted)
+    {
+        if (!rtaa_tls_ready(r->tls))
+            return RTAA_ESECURITY;
+        int rc = rtaa_tls_ingest(r->tls, f.data, f.size);
+        size_t n = 0;
+        if (!rc)
+            rc = rtaa_tls_decrypt(r->tls, r->plain, sizeof(r->plain), &n);
+        /* The supported AAP profile uses one TLS application record per frame.
+         * Do not silently associate a delayed record with a different channel. */
+        if (rc || !n || rtaa_tls_pending(r->tls))
+            return RTAA_ESECURITY;
+        f.data = r->plain;
+        f.size = n;
+    }
+    else if (f.channel || r->state >= RTAA_DISCOVERY)
+        return RTAA_ESECURITY;
+    int role = role_by_id(r, f.channel);
+    if (f.channel && role < 0)
+        return RTAA_EPROTO;
+    rtaa_assembly *a = f.channel ? &r->channels[role].assembly : &r->control;
+    bool complete;
+    int rc = rtaa_assembly_push(a, &f, &complete);
+    if (rc || !complete)
+        return rc;
+    ++r->stats.messages;
+    uint16_t message = (uint16_t)(((uint16_t)a->data[0] << 8) | a->data[1]);
+    const uint8_t *p = a->data + 2;
+    size_t n = a->used - 2;
+    r->last_rx = now(r);
+    if (!encrypted)
+    {
+        if (r->state == RTAA_VERSION && !f.channel && message == 2)
+        {
+            if (n != 6 || p[0] || p[1] != 1 || p[2] || p[3] < 1 || p[4] || p[5])
+                return RTAA_EPROTO;
+            transition(r, RTAA_TLS, 0);
+            return handshake(r);
+        }
+        if (r->state == RTAA_TLS && !f.channel && message == 3)
+        {
+            rc = rtaa_tls_ingest(r->tls, p, n);
+            return rc ? rc : handshake(r);
+        }
+        return RTAA_ESTATE;
+    }
+    /* Control-flag messages (ChannelOpenRequest) can be carried on the target
+     * channel, as in aasdk. Validate the requested ID against that envelope. */
+    if (f.channel && message == 7)
+    {
+        aap_ChannelOpen v = aap_ChannelOpen_init_zero;
+        rc = decode(aap_ChannelOpen_fields, &v, p, n);
+        if (rc || v.channel_id != f.channel)
+            return RTAA_EPROTO;
+        return control_message(r, message, p, n);
+    }
+    return f.channel ? service_message(r, (rtaa_role)role, message, p, n)
+                     : control_message(r, message, p, n);
+}
+static bool valid_name(const char *p)
+{
+    if (!p)
+        return false;
+    for (size_t i = 0; i < 96; ++i)
+        if (!p[i])
+            return i != 0;
+    return false;
+}
+int rtaa_receiver_create(const rtaa_receiver_config *config, rtaa_receiver **out)
+{
+    if (!out)
+        return RTAA_EINVAL;
+    *out = NULL;
+    if (!config || !config->memory.allocate || !config->memory.release ||
+        !config->transport.write || !config->transport.now_ms || !config->io_timeout_ms ||
+        !config->session_timeout_ms || !config->heartbeat_ms ||
+        config->heartbeat_ms >= config->session_timeout_ms ||
+        rtaa_geometry_validate(&config->geometry) || config->geometry.frame_width != 1280 ||
+        config->geometry.frame_height != 720 || !valid_name(config->name) ||
+        !valid_name(config->manufacturer) || !valid_name(config->model))
+        return RTAA_EINVAL;
+    size_t total = sizeof(rtaa_receiver) + rtaa_tls_storage_size();
+    bool any = false;
+    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+    {
+        const rtaa_channel_config *c = &config->channels[i];
+        if (!c->id)
+            continue;
+        any = true;
+        if (c->message_capacity < 256 || c->message_capacity > 4u * 1024u * 1024u ||
+            c->message_capacity > SIZE_MAX - total)
+            return RTAA_EBOUNDS;
+        total += c->message_capacity;
+        for (unsigned j = 0; j < i; ++j)
+            if (config->channels[j].id == c->id)
+                return RTAA_EINVAL;
+        if (i <= RTAA_SPEECH && (!config->sink.start || !config->sink.data || !config->sink.stop))
+            return RTAA_EINVAL;
+        if (i == RTAA_MIC && !config->sink.microphone)
+            return RTAA_EINVAL;
+    }
+    if (!any || total > config->memory_limit)
+        return RTAA_EBOUNDS;
+    rtaa_receiver *r = config->memory.allocate(config->memory.ctx, sizeof(*r));
+    if (!r)
+        return RTAA_EBOUNDS;
+    memset(r, 0, sizeof(*r));
+    r->c = *config;
+    r->control = (rtaa_assembly){0, 0, r->control_data, sizeof(r->control_data), 0, 0, false};
+    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+    {
+        channel *c = &r->channels[i];
+        c->assembly.channel = config->channels[i].id;
+        if (!c->assembly.channel)
+            continue;
+        c->assembly.capacity = config->channels[i].message_capacity;
+        c->assembly.data = config->memory.allocate(config->memory.ctx, c->assembly.capacity);
+        if (!c->assembly.data)
+        {
+            rtaa_receiver_destroy(r);
+            return RTAA_EBOUNDS;
+        }
+    }
+    int rc = rtaa_tls_create(&config->tls, &r->tls);
+    if (rc)
+    {
+        rtaa_receiver_destroy(r);
+        return rc;
+    }
+    *out = r;
+    return RTAA_OK;
+}
+void rtaa_receiver_destroy(rtaa_receiver *r)
+{
+    if (!r)
+        return;
+    if (r->state != RTAA_IDLE)
+        retire(r);
+    rtaa_tls_destroy(r->tls);
+    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+    {
+        if (r->channels[i].assembly.data)
+            r->c.memory.release(r->c.memory.ctx, r->channels[i].assembly.data);
+    }
+    rtaa_allocator m = r->c.memory;
+    memset(r, 0, sizeof(*r));
+    m.release(m.ctx, r);
+}
+int rtaa_receiver_start(rtaa_receiver *r)
+{
+    if (!r || r->state != RTAA_IDLE)
+        return RTAA_ESTATE;
+    rtaa_parser_reset(&r->parser);
+    r->last_rx = now(r);
+    transition(r, RTAA_VERSION, 0);
+    static const uint8_t version[] = {0, 1, 0, 1};
+    int rc = send_body(r, 0, 1, version, sizeof(version), false, false);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_feed(rtaa_receiver *r, const uint8_t *p, size_t n)
+{
+    if (!r || r->state == RTAA_IDLE || r->state == RTAA_CLOSED || r->state == RTAA_FAILED)
+        return RTAA_ESTATE;
+    int rc = rtaa_parser_feed(&r->parser, p, n, on_frame, r);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_poll(rtaa_receiver *r)
+{
+    if (!r || r->state == RTAA_IDLE || r->state == RTAA_CLOSED || r->state == RTAA_FAILED)
+        return RTAA_ESTATE;
+    uint64_t t = now(r);
+    if ((r->state != RTAA_CONNECTED && t - r->stage_time >= r->c.session_timeout_ms) ||
+        (r->state == RTAA_CONNECTED && t - r->last_rx >= r->c.session_timeout_ms) ||
+        (r->ping_pending && t - r->ping_time >= r->c.session_timeout_ms))
+        return fail(r, RTAA_ETIMEOUT);
+    if (r->state == RTAA_CONNECTED && !r->ping_pending && t - r->ping_time >= r->c.heartbeat_ms)
+    {
+        aap_Ping ping = {(int64_t)t};
+        r->ping_token = t;
+        int rc = send_pb(r, 0, 11, aap_Ping_fields, &ping, true, true);
+        if (rc)
+            return fail(r, rc);
+        r->ping_pending = true;
+        r->ping_time = t;
+    }
+    if (!r->c.transport.read)
+        return RTAA_OK;
+    uint8_t buffer[2048];
+    int n = r->c.transport.read(r->c.transport.ctx, buffer, sizeof(buffer), r->c.io_timeout_ms);
+    if (n < 0)
+        return fail(r, n);
+    if ((size_t)n > sizeof(buffer))
+        return fail(r, RTAA_EIO);
+    return n ? rtaa_receiver_feed(r, buffer, (size_t)n) : RTAA_AGAIN;
+}
+static bool ready(rtaa_receiver *r, rtaa_role role)
+{
+    return r && r->state == RTAA_CONNECTED && r->c.channels[role].id && r->channels[role].open;
+}
+int rtaa_receiver_touch(rtaa_receiver *r, uint8_t action, uint16_t id, uint16_t x, uint16_t y,
+                        uint64_t us)
+{
+    if (!ready(r, RTAA_INPUT) || !r->channels[RTAA_INPUT].bound)
+        return RTAA_ESTATE;
+    if (action > 2)
+        return RTAA_EINVAL;
+    uint16_t ox, oy;
+    int rc = rtaa_touch_map(&r->c.geometry, x, y, &ox, &oy);
+    if (rc)
+        return rc;
+    aap_InputEvent v = aap_InputEvent_init_zero;
+    v.timestamp = us;
+    v.has_touch = true;
+    v.touch.locations_count = 1;
+    v.touch.locations[0] = (aap_TouchLocation){ox, oy, id};
+    v.touch.has_action = v.touch.has_action_index = true;
+    v.touch.action = action;
+    rc = send_pb(r, r->c.channels[RTAA_INPUT].id, 0x8001, aap_InputEvent_fields, &v, true, false);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_key(rtaa_receiver *r, uint32_t key, bool pressed, uint64_t us)
+{
+    if (!ready(r, RTAA_INPUT) || !r->channels[RTAA_INPUT].bound)
+        return RTAA_ESTATE;
+    if (key != 3 && key != 4 && key != 5 && key != 6 && key != 19 && key != 20 && key != 21 &&
+        key != 23)
+        return RTAA_ENOTSUP;
+    aap_InputEvent v = aap_InputEvent_init_zero;
+    v.timestamp = us;
+    v.has_button = true;
+    v.button.buttons_count = 1;
+    v.button.buttons[0].keycode = key;
+    v.button.buttons[0].pressed = pressed;
+    int rc =
+        send_pb(r, r->c.channels[RTAA_INPUT].id, 0x8001, aap_InputEvent_fields, &v, true, false);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_night(rtaa_receiver *r, bool night)
+{
+    if (!ready(r, RTAA_SENSOR) || !r->night_subscribed)
+        return RTAA_ESTATE;
+    aap_SensorEvent v = aap_SensorEvent_init_zero;
+    v.night_count = 1;
+    v.night[0].night = night;
+    int rc =
+        send_pb(r, r->c.channels[RTAA_SENSOR].id, 0x8003, aap_SensorEvent_fields, &v, true, false);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_driving(rtaa_receiver *r, uint32_t restrictions)
+{
+    if (!ready(r, RTAA_SENSOR) || !r->driving_subscribed)
+        return RTAA_ESTATE;
+    aap_SensorEvent v = aap_SensorEvent_init_zero;
+    v.driving_count = 1;
+    v.driving[0].status = restrictions;
+    int rc =
+        send_pb(r, r->c.channels[RTAA_SENSOR].id, 0x8003, aap_SensorEvent_fields, &v, true, false);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_microphone(rtaa_receiver *r, const uint8_t *pcm, size_t n, uint64_t us)
+{
+    if (!ready(r, RTAA_MIC) || !r->mic_open)
+        return RTAA_ESTATE;
+    channel *c = &r->channels[RTAA_MIC];
+    if (!pcm || !n || n % 2 || n > RTAA_PLAIN_MAX - 10)
+        return RTAA_EINVAL;
+    if (c->outstanding >= c->window)
+        return RTAA_AGAIN;
+    uint8_t buffer[RTAA_PLAIN_MAX - 2];
+    for (unsigned i = 0; i < 8; ++i)
+        buffer[i] = (uint8_t)(us >> (56 - 8 * i));
+    memcpy(buffer + 8, pcm, n);
+    int rc = send_body(r, c->assembly.channel, 0, buffer, n + 8, true, false);
+    if (rc)
+        return fail(r, rc);
+    ++c->outstanding;
+    r->stats.microphone_bytes += n;
+    return RTAA_OK;
+}
+int rtaa_receiver_shutdown(rtaa_receiver *r)
+{
+    if (!r || r->state != RTAA_CONNECTED)
+        return RTAA_ESTATE;
+    aap_Shutdown v = {1};
+    int rc = send_pb(r, 0, 15, aap_Shutdown_fields, &v, true, true);
+    if (rc)
+        return fail(r, rc);
+    transition(r, RTAA_CLOSING, 0);
+    return RTAA_OK;
+}
+rtaa_state rtaa_receiver_state(const rtaa_receiver *r)
+{
+    return r ? r->state : RTAA_FAILED;
+}
+void rtaa_receiver_statistics(const rtaa_receiver *r, rtaa_statistics *out)
+{
+    if (r && out)
+        *out = r->stats;
+}
