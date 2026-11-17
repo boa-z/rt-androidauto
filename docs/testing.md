@@ -10,7 +10,7 @@ Tests link the actual production C sources, nanopb runtime and mbedTLS. USB and 
 | receiver | Actual byte-at-a-time framing through TLS and receiver dispatch, noncanonical service IDs, discovery, all three PCM audio roles, H.264 sink and session ACK, touch/key, night sensor, focus, microphone window/ACK, shutdown, timeout, sink error without false ACK |
 | rtthread | Actual RT-Thread port implementation against a minimal OS seam: 32-bit tick wrap and zeroed allocation/free |
 
-Public headers are also compiled in separate C and C++ translation units. The Python protobuf oracle is supplementary: it compiles unmodified pinned upstream schemas and compares six message families against the SDK subset. It does not cover the complete upstream schema or phone interoperability. The format check excludes unmodified third-party and generated code. Regeneration checks use pinned nanopb output byte-for-byte.
+Public headers are also compiled in separate C and C++ translation units. The Python protobuf oracle is supplementary: it compiles unmodified pinned upstream schemas and compares 14 message fixtures against the SDK subset. It does not cover the complete upstream schema or phone interoperability. The format check excludes unmodified third-party and generated code. Regeneration checks use pinned nanopb output byte-for-byte.
 
 ## Reproduction
 
@@ -39,3 +39,8 @@ This builds the SDK, actual RT-Thread port and client-only mbedTLS static archiv
 The current random input check is a bounded deterministic smoke test, not a long-running coverage-guided fuzz campaign. Additional corpus and fuzz work is needed for encrypted fragment interleaving, allocator failure at every allocation, all message-order permutations, optional enum behavior and modern extension traffic. No hardware timing, cache coherency, USB cancellation latency, H.264 recovery, full mode switching, audio mixing, call routing or wireless handoff is established by these tests.
 
 Use `HOST_TEST_PASS` only for the completed host checks. Record standalone archive compilation separately as `SDK_CROSS_COMPILE_PASS`. `TARGET_BUILD_PASS` and `FIRMWARE_BUILD_PASS` require the integrated target and complete image checks. Always retain `ANDROID_PHONE_NOT_RUN`, `D213_HARDWARE_NOT_RUN` and `GOOGLE_DHU_NOT_RUN` until those specific validations happen. See `delivery-status.md` for this local run's results and log locations.
+
+The 2026-11-17 [wired extension checkpoint](wired-extensions.md) adds real TLS
+regressions for control notifications, service close/reopen, fragmented TX,
+multi-record RX, configured key masks/rotary and sensor scheduler retirement.
+These extend the receiver test executable; five CTest groups remain.

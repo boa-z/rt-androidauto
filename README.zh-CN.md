@@ -29,3 +29,8 @@ nanopb 运行库和生成的消息源码已随 SDK 提供。重新生成和核�
 具体实现范围、验证结果、剩余工作和整机集成前置条件见 [交付状态](docs/delivery-status.md)、[协议兼容性](docs/protocol-compatibility.md)、[移植说明](docs/porting.md) 和 [Luban-Lite 集成准备](docs/luban-lite-integration.md)。
 
 组合 SDK 使用 GPL-3.0-only，保留 nanopb、Open Android Auto 和 AllPlay 的原始声明，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+有线协议扩展进展：已新增导航焦点、语音/电池通知、通话可用状态发送、
+通道关闭与重开、发送分片、可配置按键/旋钮及传感器调度回调。详见
+[扩展实现与待办](docs/wired-extensions.md)。默认仍采用 AAP 1.1；可配置
+版本上限不代表完整实现对应版本。无线和真实手机验证仍未完成。

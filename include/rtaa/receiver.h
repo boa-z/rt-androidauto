@@ -31,6 +31,12 @@ extern "C"
     typedef struct rtaa_receiver rtaa_receiver;
     typedef struct
     {
+        bool has_level, has_time_remaining, has_critical;
+        uint32_t level, time_remaining_s;
+        bool critical;
+    } rtaa_battery_status;
+    typedef struct
+    {
         uint8_t id; /* 1..255, unique. 0 disables this service. Never fixed by role. */
         size_t message_capacity;
     } rtaa_channel_config;
@@ -47,6 +53,16 @@ extern "C"
         int (*video_focus)(void *, bool focused);
         int (*microphone)(void *, bool open, uint32_t rate, bool ec, bool anc);
         void (*state)(void *, rtaa_state, int error);
+        /* Return actual navigation owner: native=1, projected=2. Without a
+         * callback the receiver reports native, rather than claiming focus. */
+        int (*navigation_focus)(void *, unsigned requested);
+        void (*voice_session)(void *, bool started);
+        void (*battery_status)(void *, const rtaa_battery_status *);
+        /* Optional scheduler seam for Night(10)/DrivingStatus(13). Start/update
+         * receives the peer's exact nonnegative interval; stop retires it on
+         * channel/session teardown. Supply both callbacks, or neither. */
+        int (*sensor_start)(void *, uint32_t type, int64_t refresh_interval);
+        void (*sensor_stop)(void *, uint32_t type);
     } rtaa_sink;
     typedef struct
     {
@@ -61,6 +77,13 @@ extern "C"
         /* Includes receiver buffers and TLS wrapper, excludes mbedTLS internal
          * allocations; the port must also enforce its own allocator budget. */
         size_t memory_limit;
+        /* 0 keeps legacy 1.1. Nonzero requests AAP 1.minor (1..7), accepting
+         * a peer's lower supported minor. This does not enable extra services. */
+        uint16_t protocol_minor;
+        /* Optional real hardware key set (including 65536 for rotary), up to
+         * 32 distinct positive values. Zero count preserves the legacy set. */
+        uint32_t input_keycodes[32];
+        uint8_t input_keycode_count;
     } rtaa_receiver_config;
     typedef struct
     {
@@ -83,10 +106,18 @@ extern "C"
     /* Only keys acknowledged by InputBinding may be sent. Each press requires
      * a matching release; repeats are not implemented by this profile. */
     int rtaa_receiver_key(rtaa_receiver *, uint32_t keycode, bool pressed, uint64_t us);
+    int rtaa_receiver_rotary(rtaa_receiver *, int32_t delta, uint64_t us);
     int rtaa_receiver_night(rtaa_receiver *, bool night);
     int rtaa_receiver_driving(rtaa_receiver *, uint32_t restrictions);
     int rtaa_receiver_microphone(rtaa_receiver *, const uint8_t *, size_t, uint64_t us);
     int rtaa_receiver_shutdown(rtaa_receiver *);
+    /* The negotiated minor is available after VERSION, zero beforehand. */
+    uint16_t rtaa_receiver_protocol_minor(const rtaa_receiver *);
+    /* Notify actual HFP/call availability; valid for negotiated AAP >=1.4. */
+    int rtaa_receiver_call_available(rtaa_receiver *, bool available);
+    /* Close only this service, preserving the control/TLS session. The peer
+     * may reopen and renegotiate it later. Does not fabricate release events. */
+    int rtaa_receiver_close_channel(rtaa_receiver *, rtaa_role);
     rtaa_state rtaa_receiver_state(const rtaa_receiver *);
     int rtaa_receiver_error(const rtaa_receiver *);
     void rtaa_receiver_statistics(const rtaa_receiver *, rtaa_statistics *);

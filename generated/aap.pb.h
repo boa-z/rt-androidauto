@@ -77,7 +77,7 @@ typedef struct _aap_TouchScreen {
 
 typedef struct _aap_InputChannel {
     pb_size_t keycodes_count;
-    uint32_t keycodes[8];
+    uint32_t keycodes[32];
     bool has_touchscreen;
     aap_TouchScreen touchscreen;
 } aap_InputChannel;
@@ -169,7 +169,7 @@ typedef struct _aap_VideoFocus {
 
 typedef struct _aap_Binding {
     pb_size_t keycodes_count;
-    uint32_t keycodes[8];
+    uint32_t keycodes[32];
 } aap_Binding;
 
 typedef struct _aap_TouchLocation {
@@ -200,12 +200,24 @@ typedef struct _aap_Buttons {
     aap_Button buttons[1];
 } aap_Buttons;
 
+typedef struct _aap_RelativeInput {
+    uint32_t scan_code;
+    int32_t delta;
+} aap_RelativeInput;
+
+typedef struct _aap_RelativeInputs {
+    pb_size_t events_count;
+    aap_RelativeInput events[1];
+} aap_RelativeInputs;
+
 typedef struct _aap_InputEvent {
     uint64_t timestamp;
     bool has_touch;
     aap_TouchEvent touch;
     bool has_button;
     aap_Buttons button;
+    bool has_relative;
+    aap_RelativeInputs relative;
 } aap_InputEvent;
 
 typedef struct _aap_SensorStart {
@@ -246,6 +258,31 @@ typedef struct _aap_MicResponse {
     int32_t value;
 } aap_MicResponse;
 
+/* Control-channel extensions. Keep optional presence for cross-version peers. */
+typedef struct _aap_NavigationFocus {
+    bool has_type;
+    uint32_t type;
+} aap_NavigationFocus;
+
+typedef struct _aap_VoiceSession {
+    bool has_session_type;
+    uint32_t session_type;
+} aap_VoiceSession;
+
+typedef struct _aap_BatteryStatus {
+    bool has_battery_level;
+    uint32_t battery_level;
+    bool has_time_remaining_s;
+    uint32_t time_remaining_s;
+    bool has_critical_battery;
+    bool critical_battery;
+} aap_BatteryStatus;
+
+typedef struct _aap_CallAvailability {
+    bool has_call_available;
+    bool call_available;
+} aap_CallAvailability;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -262,7 +299,7 @@ extern "C" {
 #define aap_AVChannel_init_default               {false, 0, false, 0, 0, {aap_AudioConfig_init_default}, 0, {aap_VideoConfig_init_default}}
 #define aap_AVInput_init_default                 {false, 0, false, aap_AudioConfig_init_default}
 #define aap_TouchScreen_init_default             {0, 0}
-#define aap_InputChannel_init_default            {0, {0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_default}
+#define aap_InputChannel_init_default            {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_default}
 #define aap_Sensor_init_default                  {0}
 #define aap_SensorChannel_init_default           {0, {aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default}}
 #define aap_Channel_init_default                 {0, false, aap_SensorChannel_init_default, false, aap_AVChannel_init_default, false, aap_InputChannel_init_default, false, aap_AVInput_init_default}
@@ -275,18 +312,24 @@ extern "C" {
 #define aap_FocusResponse_init_default           {0}
 #define aap_VideoFocusRequest_init_default       {false, 0, false, 0}
 #define aap_VideoFocus_init_default              {0, false, 0}
-#define aap_Binding_init_default                 {0, {0, 0, 0, 0, 0, 0, 0, 0}}
+#define aap_Binding_init_default                 {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define aap_TouchLocation_init_default           {0, 0, 0}
 #define aap_TouchEvent_init_default              {0, {aap_TouchLocation_init_default, aap_TouchLocation_init_default}, false, 0, false, 0}
 #define aap_Button_init_default                  {0, 0, 0, false, 0}
 #define aap_Buttons_init_default                 {0, {aap_Button_init_default}}
-#define aap_InputEvent_init_default              {0, false, aap_TouchEvent_init_default, false, aap_Buttons_init_default}
+#define aap_RelativeInput_init_default           {0, 0}
+#define aap_RelativeInputs_init_default          {0, {aap_RelativeInput_init_default}}
+#define aap_InputEvent_init_default              {0, false, aap_TouchEvent_init_default, false, aap_Buttons_init_default, false, aap_RelativeInputs_init_default}
 #define aap_SensorStart_init_default             {0, 0}
 #define aap_Night_init_default                   {0}
 #define aap_Driving_init_default                 {0}
 #define aap_SensorEvent_init_default             {0, {aap_Night_init_default}, 0, {aap_Driving_init_default}}
 #define aap_MicOpen_init_default                 {false, 0, false, 0, false, 0, false, 0}
 #define aap_MicResponse_init_default             {false, 0, false, 0}
+#define aap_NavigationFocus_init_default         {false, 0}
+#define aap_VoiceSession_init_default            {false, 0}
+#define aap_BatteryStatus_init_default           {false, 0, false, 0, false, 0}
+#define aap_CallAvailability_init_default        {false, 0}
 #define aap_Empty_init_zero                      {0}
 #define aap_Status_init_zero                     {0}
 #define aap_ChannelOpen_init_zero                {0, 0}
@@ -297,7 +340,7 @@ extern "C" {
 #define aap_AVChannel_init_zero                  {false, 0, false, 0, 0, {aap_AudioConfig_init_zero}, 0, {aap_VideoConfig_init_zero}}
 #define aap_AVInput_init_zero                    {false, 0, false, aap_AudioConfig_init_zero}
 #define aap_TouchScreen_init_zero                {0, 0}
-#define aap_InputChannel_init_zero               {0, {0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_zero}
+#define aap_InputChannel_init_zero               {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_zero}
 #define aap_Sensor_init_zero                     {0}
 #define aap_SensorChannel_init_zero              {0, {aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero}}
 #define aap_Channel_init_zero                    {0, false, aap_SensorChannel_init_zero, false, aap_AVChannel_init_zero, false, aap_InputChannel_init_zero, false, aap_AVInput_init_zero}
@@ -310,18 +353,24 @@ extern "C" {
 #define aap_FocusResponse_init_zero              {0}
 #define aap_VideoFocusRequest_init_zero          {false, 0, false, 0}
 #define aap_VideoFocus_init_zero                 {0, false, 0}
-#define aap_Binding_init_zero                    {0, {0, 0, 0, 0, 0, 0, 0, 0}}
+#define aap_Binding_init_zero                    {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define aap_TouchLocation_init_zero              {0, 0, 0}
 #define aap_TouchEvent_init_zero                 {0, {aap_TouchLocation_init_zero, aap_TouchLocation_init_zero}, false, 0, false, 0}
 #define aap_Button_init_zero                     {0, 0, 0, false, 0}
 #define aap_Buttons_init_zero                    {0, {aap_Button_init_zero}}
-#define aap_InputEvent_init_zero                 {0, false, aap_TouchEvent_init_zero, false, aap_Buttons_init_zero}
+#define aap_RelativeInput_init_zero              {0, 0}
+#define aap_RelativeInputs_init_zero             {0, {aap_RelativeInput_init_zero}}
+#define aap_InputEvent_init_zero                 {0, false, aap_TouchEvent_init_zero, false, aap_Buttons_init_zero, false, aap_RelativeInputs_init_zero}
 #define aap_SensorStart_init_zero                {0, 0}
 #define aap_Night_init_zero                      {0}
 #define aap_Driving_init_zero                    {0}
 #define aap_SensorEvent_init_zero                {0, {aap_Night_init_zero}, 0, {aap_Driving_init_zero}}
 #define aap_MicOpen_init_zero                    {false, 0, false, 0, false, 0, false, 0}
 #define aap_MicResponse_init_zero                {false, 0, false, 0}
+#define aap_NavigationFocus_init_zero            {false, 0}
+#define aap_VoiceSession_init_zero               {false, 0}
+#define aap_BatteryStatus_init_zero              {false, 0, false, 0, false, 0}
+#define aap_CallAvailability_init_zero           {false, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define aap_Status_status_tag                    1
@@ -389,9 +438,13 @@ extern "C" {
 #define aap_Button_meta_tag                      3
 #define aap_Button_long_press_tag                4
 #define aap_Buttons_buttons_tag                  1
+#define aap_RelativeInput_scan_code_tag          1
+#define aap_RelativeInput_delta_tag              2
+#define aap_RelativeInputs_events_tag            1
 #define aap_InputEvent_timestamp_tag             1
 #define aap_InputEvent_touch_tag                 3
 #define aap_InputEvent_button_tag                4
+#define aap_InputEvent_relative_tag              6
 #define aap_SensorStart_type_tag                 1
 #define aap_SensorStart_refresh_interval_tag     2
 #define aap_Night_night_tag                      1
@@ -404,6 +457,12 @@ extern "C" {
 #define aap_MicOpen_max_unacked_tag              4
 #define aap_MicResponse_session_tag              1
 #define aap_MicResponse_value_tag                2
+#define aap_NavigationFocus_type_tag             1
+#define aap_VoiceSession_session_type_tag        1
+#define aap_BatteryStatus_battery_level_tag      1
+#define aap_BatteryStatus_time_remaining_s_tag   2
+#define aap_BatteryStatus_critical_battery_tag   3
+#define aap_CallAvailability_call_available_tag  1
 
 /* Struct field encoding specification for nanopb */
 #define aap_Empty_FIELDLIST(X, a) \
@@ -596,14 +655,28 @@ X(a, STATIC,   REPEATED, MESSAGE,  buttons,           1)
 #define aap_Buttons_DEFAULT NULL
 #define aap_Buttons_buttons_MSGTYPE aap_Button
 
+#define aap_RelativeInput_FIELDLIST(X, a) \
+X(a, STATIC,   REQUIRED, UINT32,   scan_code,         1) \
+X(a, STATIC,   REQUIRED, INT32,    delta,             2)
+#define aap_RelativeInput_CALLBACK NULL
+#define aap_RelativeInput_DEFAULT NULL
+
+#define aap_RelativeInputs_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, MESSAGE,  events,            1)
+#define aap_RelativeInputs_CALLBACK NULL
+#define aap_RelativeInputs_DEFAULT NULL
+#define aap_RelativeInputs_events_MSGTYPE aap_RelativeInput
+
 #define aap_InputEvent_FIELDLIST(X, a) \
 X(a, STATIC,   REQUIRED, UINT64,   timestamp,         1) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  touch,             3) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  button,            4)
+X(a, STATIC,   OPTIONAL, MESSAGE,  button,            4) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  relative,          6)
 #define aap_InputEvent_CALLBACK NULL
 #define aap_InputEvent_DEFAULT NULL
 #define aap_InputEvent_touch_MSGTYPE aap_TouchEvent
 #define aap_InputEvent_button_MSGTYPE aap_Buttons
+#define aap_InputEvent_relative_MSGTYPE aap_RelativeInputs
 
 #define aap_SensorStart_FIELDLIST(X, a) \
 X(a, STATIC,   REQUIRED, UINT32,   type,              1) \
@@ -643,6 +716,28 @@ X(a, STATIC,   OPTIONAL, INT32,    value,             2)
 #define aap_MicResponse_CALLBACK NULL
 #define aap_MicResponse_DEFAULT NULL
 
+#define aap_NavigationFocus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   type,              1)
+#define aap_NavigationFocus_CALLBACK NULL
+#define aap_NavigationFocus_DEFAULT NULL
+
+#define aap_VoiceSession_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   session_type,      1)
+#define aap_VoiceSession_CALLBACK NULL
+#define aap_VoiceSession_DEFAULT NULL
+
+#define aap_BatteryStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   battery_level,     1) \
+X(a, STATIC,   OPTIONAL, UINT32,   time_remaining_s,   2) \
+X(a, STATIC,   OPTIONAL, BOOL,     critical_battery,   3)
+#define aap_BatteryStatus_CALLBACK NULL
+#define aap_BatteryStatus_DEFAULT NULL
+
+#define aap_CallAvailability_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, BOOL,     call_available,    1)
+#define aap_CallAvailability_CALLBACK NULL
+#define aap_CallAvailability_DEFAULT NULL
+
 extern const pb_msgdesc_t aap_Empty_msg;
 extern const pb_msgdesc_t aap_Status_msg;
 extern const pb_msgdesc_t aap_ChannelOpen_msg;
@@ -671,6 +766,8 @@ extern const pb_msgdesc_t aap_TouchLocation_msg;
 extern const pb_msgdesc_t aap_TouchEvent_msg;
 extern const pb_msgdesc_t aap_Button_msg;
 extern const pb_msgdesc_t aap_Buttons_msg;
+extern const pb_msgdesc_t aap_RelativeInput_msg;
+extern const pb_msgdesc_t aap_RelativeInputs_msg;
 extern const pb_msgdesc_t aap_InputEvent_msg;
 extern const pb_msgdesc_t aap_SensorStart_msg;
 extern const pb_msgdesc_t aap_Night_msg;
@@ -678,6 +775,10 @@ extern const pb_msgdesc_t aap_Driving_msg;
 extern const pb_msgdesc_t aap_SensorEvent_msg;
 extern const pb_msgdesc_t aap_MicOpen_msg;
 extern const pb_msgdesc_t aap_MicResponse_msg;
+extern const pb_msgdesc_t aap_NavigationFocus_msg;
+extern const pb_msgdesc_t aap_VoiceSession_msg;
+extern const pb_msgdesc_t aap_BatteryStatus_msg;
+extern const pb_msgdesc_t aap_CallAvailability_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define aap_Empty_fields &aap_Empty_msg
@@ -708,6 +809,8 @@ extern const pb_msgdesc_t aap_MicResponse_msg;
 #define aap_TouchEvent_fields &aap_TouchEvent_msg
 #define aap_Button_fields &aap_Button_msg
 #define aap_Buttons_fields &aap_Buttons_msg
+#define aap_RelativeInput_fields &aap_RelativeInput_msg
+#define aap_RelativeInputs_fields &aap_RelativeInputs_msg
 #define aap_InputEvent_fields &aap_InputEvent_msg
 #define aap_SensorStart_fields &aap_SensorStart_msg
 #define aap_Night_fields &aap_Night_msg
@@ -715,6 +818,10 @@ extern const pb_msgdesc_t aap_MicResponse_msg;
 #define aap_SensorEvent_fields &aap_SensorEvent_msg
 #define aap_MicOpen_fields &aap_MicOpen_msg
 #define aap_MicResponse_fields &aap_MicResponse_msg
+#define aap_NavigationFocus_fields &aap_NavigationFocus_msg
+#define aap_VoiceSession_fields &aap_VoiceSession_msg
+#define aap_BatteryStatus_fields &aap_BatteryStatus_msg
+#define aap_CallAvailability_fields &aap_CallAvailability_msg
 
 /* Maximum encoded size of messages (where known) */
 #define AAP_AAP_PB_H_MAX_SIZE                    aap_Discovery_size
@@ -722,22 +829,27 @@ extern const pb_msgdesc_t aap_MicResponse_msg;
 #define aap_AVInput_size                         26
 #define aap_Ack_size                             105
 #define aap_AudioConfig_size                     18
-#define aap_Binding_size                         48
+#define aap_BatteryStatus_size                   14
+#define aap_Binding_size                         192
 #define aap_Button_size                          16
 #define aap_Buttons_size                         19
+#define aap_CallAvailability_size                2
 #define aap_ChannelOpen_size                     17
-#define aap_Channel_size                         243
-#define aap_Discovery_size                       2213
+#define aap_Channel_size                         388
+#define aap_Discovery_size                       3228
 #define aap_Driving_size                         6
 #define aap_Empty_size                           0
 #define aap_FocusRequest_size                    6
 #define aap_FocusResponse_size                   6
-#define aap_InputChannel_size                    62
-#define aap_InputEvent_size                      86
+#define aap_InputChannel_size                    206
+#define aap_InputEvent_size                      108
 #define aap_MicOpen_size                         17
 #define aap_MicResponse_size                     22
+#define aap_NavigationFocus_size                 6
 #define aap_Night_size                           2
 #define aap_Ping_size                            11
+#define aap_RelativeInput_size                   17
+#define aap_RelativeInputs_size                  20
 #define aap_SensorChannel_size                   64
 #define aap_SensorEvent_size                     14
 #define aap_SensorStart_size                     17
@@ -753,6 +865,7 @@ extern const pb_msgdesc_t aap_MicResponse_msg;
 #define aap_VideoConfig_size                     36
 #define aap_VideoFocusRequest_size               12
 #define aap_VideoFocus_size                      8
+#define aap_VoiceSession_size                    6
 
 #ifdef __cplusplus
 } /* extern "C" */

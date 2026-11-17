@@ -45,7 +45,7 @@ PB_BIND(aap_Sensor, aap_Sensor, AUTO)
 PB_BIND(aap_SensorChannel, aap_SensorChannel, AUTO)
 
 
-PB_BIND(aap_Channel, aap_Channel, AUTO)
+PB_BIND(aap_Channel, aap_Channel, 2)
 
 
 PB_BIND(aap_Discovery, aap_Discovery, 2)
@@ -90,6 +90,12 @@ PB_BIND(aap_Button, aap_Button, AUTO)
 PB_BIND(aap_Buttons, aap_Buttons, AUTO)
 
 
+PB_BIND(aap_RelativeInput, aap_RelativeInput, AUTO)
+
+
+PB_BIND(aap_RelativeInputs, aap_RelativeInputs, AUTO)
+
+
 PB_BIND(aap_InputEvent, aap_InputEvent, AUTO)
 
 
@@ -109,6 +115,18 @@ PB_BIND(aap_MicOpen, aap_MicOpen, AUTO)
 
 
 PB_BIND(aap_MicResponse, aap_MicResponse, AUTO)
+
+
+PB_BIND(aap_NavigationFocus, aap_NavigationFocus, AUTO)
+
+
+PB_BIND(aap_VoiceSession, aap_VoiceSession, AUTO)
+
+
+PB_BIND(aap_BatteryStatus, aap_BatteryStatus, AUTO)
+
+
+PB_BIND(aap_CallAvailability, aap_CallAvailability, AUTO)
 
 
 

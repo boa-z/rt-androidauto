@@ -31,7 +31,11 @@ def collect(name):
 
 for name in ["control/ChannelOpenRequestMessage", "audio/AudioConfigData",
              "av/AVChannelSetupRequestMessage", "av/AVChannelStartIndicationMessage",
-             "input/TouchLocationData", "video/VideoConfigData"]:
+             "input/TouchLocationData", "video/VideoConfigData",
+             "navigation/NavigationFocusRequestMessage", "navigation/NavigationFocusResponseMessage",
+             "control/VoiceSessionRequestMessage", "control/BatteryStatusMessage",
+             "control/CallAvailabilityMessage", "input/InputBindingRequestMessage",
+             "input/InputChannelConfigData", "input/RelativeInputEventData"]:
     collect("oaa/" + name + ".proto")
 args.output.mkdir(parents=True, exist_ok=True)
 subprocess.run([sys.executable, "-m", "grpc_tools.protoc", "-I", str(args.upstream),
@@ -50,10 +54,18 @@ pairs = [
     (ours.Start(session=42, config=0), upstream("av.AVChannelStartIndicationMessage", "AVChannelStartIndication")(session=42, config=0)),
     (ours.TouchLocation(x=256, y=60, pointer_id=0), upstream("input.TouchLocationData", "TouchLocation")(x=256, y=60, pointer_id=0)),
     (ours.VideoConfig(video_resolution=2, video_fps=1, margin_width=512, margin_height=120, dpi=160), upstream("video.VideoConfigData", "VideoConfig")(video_resolution=2, video_fps=1, margin_width=512, margin_height=120, dpi=160)),
+    (ours.NavigationFocus(type=2), upstream("navigation.NavigationFocusRequestMessage", "NavigationFocusRequest")(type=2)),
+    (ours.NavigationFocus(type=1), upstream("navigation.NavigationFocusResponseMessage", "NavigationFocusResponse")(type=1)),
+    (ours.VoiceSession(session_type=1), upstream("control.VoiceSessionRequestMessage", "VoiceSessionRequest")(session_type=1)),
+    (ours.BatteryStatus(battery_level=0, time_remaining_s=60, critical_battery=True), upstream("control.BatteryStatusMessage", "BatteryStatusNotification")(battery_level=0, time_remaining_s=60, critical_battery=True)),
+    (ours.CallAvailability(call_available=False), upstream("control.CallAvailabilityMessage", "CallAvailabilityStatus")(call_available=False)),
+    (ours.Binding(keycodes=[4, 22, 85, 65536]), upstream("input.InputBindingRequestMessage", "InputBindingRequest")(keycodes=[4, 22, 85, 65536])),
+    (ours.InputChannel(keycodes=[4, 22, 85, 65536]), upstream("input.InputChannelConfigData", "InputChannelConfig")(supported_keycodes=[4, 22, 85, 65536])),
+    (ours.RelativeInput(scan_code=65536, delta=-3), upstream("input.RelativeInputEventData", "RelativeInputEvent")(scan_code=65536, delta=-3)),
 ]
 for a, b in pairs:
     assert a.SerializeToString() == b.SerializeToString(), (a, b)
     b.ParseFromString(a.SerializeToString())
     a.ParseFromString(b.SerializeToString())
     assert a.IsInitialized() and b.IsInitialized()
-print("upstream protobuf interoperability: PASS (6 message families, SHA " + sha + ")")
+print("upstream protobuf interoperability: PASS (" + str(len(pairs)) + " message fixtures, SHA " + sha + ")")

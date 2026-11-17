@@ -1,5 +1,16 @@
 # Delivery checkpoints
 
+## 2026-11-17 wired protocol extensions
+
+The [wired extensions checkpoint](wired-extensions.md) adds navigation focus,
+voice and battery notifications, call availability output, legacy channel
+close/reopen, bounded fragmented TX, multiple complete TLS records per AAP frame,
+configurable 32-key/rotary input and sensor scheduling callbacks. Windows and
+Linux ASan/UBSan CTest pass 5/5, the upstream protobuf oracle passes 14 fixtures,
+and the actual RT-Thread/D213 SDK archive compiles. Phone/board/DHU remain NOT_RUN.
+Wireless and remaining service coverage are explicitly unfinished. Older tables
+below retain their original checkpoint's historical scope.
+
 ## 2026-11-17 follow-up
 
 The first SDK checkpoint was published as `86af84bbc69cfb97ead6ae552af8714642450dc4`. Its [Linux and Windows CI](https://github.com/boa-z/rt-androidauto/actions/runs/44038629241) both passed. The product now has a real submodule and an authorized `codex/androidauto-integration` branch. Product app and UI development is tracked in its own repository; the independent demo is `application/rt-thread/rtprojection`, with Android Auto as its first backend.

@@ -32,7 +32,7 @@ message AVChannel {
 }
 message AVInput { optional uint32 stream_type = 1; optional AudioConfig audio_config = 2; }
 message TouchScreen { required uint32 width = 1; required uint32 height = 2; }
-message InputChannel { repeated uint32 keycodes = 1; optional TouchScreen touchscreen = 2; }
+message InputChannel { repeated uint32 keycodes = 1 [packed = true]; optional TouchScreen touchscreen = 2; }
 message Sensor { required uint32 type = 1; }
 message SensorChannel { repeated Sensor sensors = 1; }
 message Channel {
@@ -59,15 +59,26 @@ message FocusRequest { optional uint32 type = 1; }
 message FocusResponse { required uint32 state = 1; }
 message VideoFocusRequest { optional uint32 mode = 2; optional uint32 reason = 3; }
 message VideoFocus { required uint32 focus = 1; optional bool unrequested = 2; }
-message Binding { repeated uint32 keycodes = 1; }
+message Binding { repeated uint32 keycodes = 1 [packed = true]; }
 message TouchLocation { required uint32 x = 1; required uint32 y = 2; required uint32 pointer_id = 3; }
 message TouchEvent { repeated TouchLocation locations = 1; optional uint32 action_index = 2; optional uint32 action = 3; }
 message Button { required uint32 keycode = 1; required bool pressed = 2; required uint32 meta = 3; optional bool long_press = 4; }
 message Buttons { repeated Button buttons = 1; }
-message InputEvent { required uint64 timestamp = 1; optional TouchEvent touch = 3; optional Buttons button = 4; }
+message RelativeInput { required uint32 scan_code = 1; required int32 delta = 2; }
+message RelativeInputs { repeated RelativeInput events = 1; }
+message InputEvent { required uint64 timestamp = 1; optional TouchEvent touch = 3; optional Buttons button = 4; optional RelativeInputs relative = 6; }
 message SensorStart { required uint32 type = 1; required int64 refresh_interval = 2; }
 message Night { required bool night = 1; }
 message Driving { required uint32 status = 1; }
 message SensorEvent { repeated Night night = 10; repeated Driving driving = 13; }
 message MicOpen { optional bool open = 1; optional bool anc = 2; optional bool ec = 3; optional int32 max_unacked = 4; }
 message MicResponse { optional int32 session = 1; optional int32 value = 2; }
+// Control-channel extensions. Keep optional presence for cross-version peers.
+message NavigationFocus { optional uint32 type = 1; }
+message VoiceSession { optional uint32 session_type = 1; }
+message BatteryStatus {
+  optional uint32 battery_level = 1;
+  optional uint32 time_remaining_s = 2;
+  optional bool critical_battery = 3;
+}
+message CallAvailability { optional bool call_available = 1; }

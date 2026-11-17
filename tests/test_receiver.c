@@ -10,7 +10,8 @@ typedef struct
 {
     peer server;
     rtaa_parser parser;
-    uint8_t writes[65536], body[8192];
+    uint8_t writes[131072], body[65536], assembled[65538];
+    rtaa_assembly assembly;
     size_t writes_size, body_size;
     uint8_t channel;
     uint16_t message;
@@ -18,6 +19,14 @@ typedef struct
     unsigned starts, stops, media, cancelled, closed, mic_changes;
     bool reject;
     int write_error;
+    size_t fail_after_bytes;
+    unsigned fragments, navigation_requests, voice_changes, batteries;
+    int navigation_owner;
+    bool voice_active;
+    rtaa_battery_status battery;
+    unsigned sensor_starts, sensor_stops;
+    uint32_t sensor_type;
+    int64_t sensor_interval;
 } fixture;
 static uint64_t milliseconds(void *ctx)
 {
@@ -29,8 +38,12 @@ static int write_transport(void *ctx, const uint8_t *p, size_t n, uint32_t timeo
     assert(timeout && n);
     if (f->write_error)
         return f->write_error;
+    if (f->fail_after_bytes && f->writes_size >= f->fail_after_bytes)
+        return RTAA_EIO;
     if (n > 17)
         n = 17; /* force partial USB writes */
+    if (f->fail_after_bytes && n > f->fail_after_bytes - f->writes_size)
+        n = f->fail_after_bytes - f->writes_size;
     assert(n <= sizeof(f->writes) - f->writes_size);
     memcpy(f->writes + f->writes_size, p, n);
     f->writes_size += n;
@@ -85,6 +98,39 @@ static int mic_sink(void *ctx, bool open, uint32_t rate, bool ec, bool anc)
     ++((fixture *)ctx)->mic_changes;
     return 0;
 }
+static int navigation_focus(void *ctx, unsigned requested)
+{
+    fixture *f = ctx;
+    assert(requested == 1 || requested == 2);
+    ++f->navigation_requests;
+    return f->navigation_owner;
+}
+static void voice_session(void *ctx, bool started)
+{
+    fixture *f = ctx;
+    ++f->voice_changes;
+    f->voice_active = started;
+}
+static void battery_status(void *ctx, const rtaa_battery_status *status)
+{
+    fixture *f = ctx;
+    ++f->batteries;
+    f->battery = *status;
+}
+static int sensor_start(void *ctx, uint32_t type, int64_t interval)
+{
+    fixture *f = ctx;
+    ++f->sensor_starts;
+    f->sensor_type = type;
+    f->sensor_interval = interval;
+    return 0;
+}
+static void sensor_stop(void *ctx, uint32_t type)
+{
+    fixture *f = ctx;
+    assert(type == 10 || type == 13);
+    ++f->sensor_stops;
+}
 static int from_receiver(void *ctx, const rtaa_frame *frame)
 {
     fixture *f = ctx;
@@ -99,6 +145,20 @@ static int from_receiver(void *ctx, const rtaa_frame *frame)
         p = plain;
         n = (size_t)got;
     }
+    ++f->fragments;
+    rtaa_frame plain_frame = *frame;
+    plain_frame.data = p;
+    plain_frame.size = n;
+    if (!f->assembly.active)
+        f->assembly.channel = frame->channel;
+    f->assembly.data = f->assembled;
+    f->assembly.capacity = sizeof(f->assembled);
+    bool complete;
+    assert(!rtaa_assembly_push(&f->assembly, &plain_frame, &complete));
+    if (!complete)
+        return 0;
+    p = f->assembled;
+    n = f->assembly.used;
     assert(n >= 2);
     f->message = (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
     f->channel = frame->channel;
@@ -131,8 +191,8 @@ static int inject(rtaa_receiver *r, uint8_t id, uint8_t flags, const uint8_t *p,
     }
     return 0;
 }
-static int send_message(fixture *f, rtaa_receiver *r, uint8_t id, uint16_t message,
-                        const uint8_t *p, size_t n)
+static int send_message_flags(fixture *f, rtaa_receiver *r, uint8_t id, uint16_t message,
+                              const uint8_t *p, size_t n, uint8_t flags)
 {
     uint8_t plain[8192];
     assert(n < sizeof(plain) - 2);
@@ -142,9 +202,14 @@ static int send_message(fixture *f, rtaa_receiver *r, uint8_t id, uint16_t messa
         memcpy(plain + 2, p, n);
     assert(!f->server.output_size);
     assert(mbedtls_ssl_write(&f->server.ssl, plain, n + 2) == (int)n + 2);
-    int rc = inject(r, id, RTAA_ENCRYPTED, f->server.output, f->server.output_size);
+    int rc = inject(r, id, RTAA_ENCRYPTED | flags, f->server.output, f->server.output_size);
     f->server.output_size = 0;
     return rc;
+}
+static int send_message(fixture *f, rtaa_receiver *r, uint8_t id, uint16_t message,
+                        const uint8_t *p, size_t n)
+{
+    return send_message_flags(f, r, id, message, p, n, 0);
 }
 static int send_proto(fixture *f, rtaa_receiver *r, uint8_t id, uint16_t message,
                       const pb_msgdesc_t *desc, const void *value)
@@ -164,8 +229,17 @@ static rtaa_receiver_config configuration(fixture *f)
     c.tls = tls_config(&f->server);
     c.transport =
         (rtaa_transport){f, NULL, write_transport, milliseconds, cancel_transport, close_transport};
-    c.sink =
-        (rtaa_sink){f, start_sink, data_sink, stop_sink, audio_focus, video_focus, mic_sink, NULL};
+    c.sink = (rtaa_sink){.ctx = f,
+                         .start = start_sink,
+                         .data = data_sink,
+                         .stop = stop_sink,
+                         .audio_focus = audio_focus,
+                         .video_focus = video_focus,
+                         .microphone = mic_sink,
+                         .navigation_focus = navigation_focus,
+                         .voice_session = voice_session,
+                         .battery_status = battery_status};
+    f->navigation_owner = 2;
     c.geometry = (rtaa_geometry){1280, 720, 512, 120, 0, 0, 768, 600};
     /* Deliberately use noncanonical, noncontiguous IDs, including >127. */
     const uint8_t ids[] = {197, 9, 71, 111, 23, 87, 201};
@@ -187,13 +261,13 @@ static rtaa_receiver *create(fixture *f)
     assert(!rtaa_receiver_create(&c, &r));
     return r;
 }
-static void connect(fixture *f, rtaa_receiver *r)
+static void connect_version(fixture *f, rtaa_receiver *r, uint8_t minor)
 {
     if (rtaa_receiver_state(r) == RTAA_IDLE)
         assert(!rtaa_receiver_start(r));
     drain(f);
     assert(f->message == 1);
-    uint8_t version[] = {0, 2, 0, 1, 0, 1, 0, 0};
+    uint8_t version[] = {0, 2, 0, 1, 0, minor, 0, 0};
     assert(!inject(r, 0, 0, version, sizeof(version)));
     for (unsigned i = 0; i < 40 && rtaa_receiver_state(r) != RTAA_DISCOVERY; ++i)
     {
@@ -222,6 +296,11 @@ static void connect(fixture *f, rtaa_receiver *r)
     assert(d.channels[0].channel_id == 197 &&
            d.channels[0].av.video_configs[0].margin_width == 512);
     assert(rtaa_receiver_state(r) == RTAA_CONNECTED);
+    assert(rtaa_receiver_protocol_minor(r) == minor);
+}
+static void connect(fixture *f, rtaa_receiver *r)
+{
+    connect_version(f, r, 1);
 }
 static void open_channel(fixture *f, rtaa_receiver *r, uint8_t id)
 {
@@ -443,6 +522,283 @@ static void test_connection(fixture *session)
     assert(!f.live);
     peer_free(&session->server);
 }
+static void test_control_extensions(fixture *f)
+{
+    rtaa_receiver_config c = configuration(f);
+    c.protocol_minor = 4;
+    rtaa_receiver *r;
+    assert(!rtaa_receiver_create(&c, &r));
+    assert(!rtaa_receiver_protocol_minor(r));
+    connect_version(f, r, 4);
+    aap_NavigationFocus focus = {true, 2};
+    assert(!send_proto(f, r, 0, 13, aap_NavigationFocus_fields, &focus));
+    drain(f);
+    pb_istream_t in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(f->message == 14 && f->channel == 0 &&
+           pb_decode(&in, aap_NavigationFocus_fields, &focus) && focus.type == 2);
+    f->navigation_owner = 1;
+    assert(!send_proto(f, r, 0, 13, aap_NavigationFocus_fields, &focus));
+    drain(f);
+    in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_NavigationFocus_fields, &focus) && focus.type == 1);
+    assert(f->navigation_requests == 2);
+    /* Independent literal wire fixtures, including an unknown optional field. */
+    const uint8_t voice[] = {0x08, 1, 0x78, 9};
+    assert(!send_message(f, r, 0, 17, voice, sizeof(voice)));
+    assert(f->voice_active && f->voice_changes == 1 && !f->writes_size);
+    const uint8_t stop_voice[] = {0x08, 2};
+    assert(!send_message(f, r, 0, 17, stop_voice, sizeof(stop_voice)));
+    assert(!f->voice_active && f->voice_changes == 2 && !f->writes_size);
+    const uint8_t battery[] = {0x08, 0, 0x10, 60, 0x18, 1};
+    assert(!send_message(f, r, 0, 23, battery, sizeof(battery)));
+    assert(f->batteries == 1 && f->battery.has_level && f->battery.level == 0 &&
+           f->battery.has_time_remaining && f->battery.time_remaining_s == 60 &&
+           f->battery.has_critical && f->battery.critical && !f->writes_size);
+    assert(!send_message(f, r, 0, 23, NULL, 0));
+    assert(f->batteries == 2 && !f->battery.has_level && !f->battery.has_critical);
+    assert(!rtaa_receiver_call_available(r, false));
+    drain(f);
+    assert(f->message == 24 && f->body_size == 2 && f->body[0] == 8 && !f->body[1]);
+    /* Two complete TLS records in one AAP fragment still form one message. */
+    const uint8_t ping[] = {0, 11, 8, 42};
+    assert(mbedtls_ssl_write(&f->server.ssl, ping, 1) == 1);
+    assert(mbedtls_ssl_write(&f->server.ssl, ping + 1, sizeof(ping) - 1) == 3);
+    assert(!inject(r, 0, RTAA_ENCRYPTED | RTAA_CONTROL, f->server.output, f->server.output_size));
+    f->server.output_size = 0;
+    drain(f);
+    assert(f->message == 12 && f->body_size == 2 && f->body[1] == 42);
+    open_channel(f, r, 87);
+    aap_Binding binding = aap_Binding_init_zero;
+    binding.keycodes_count = 1;
+    binding.keycodes[0] = 4;
+    assert(!send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding));
+    drain(f);
+    assert(!rtaa_receiver_key(r, 4, true, 1));
+    drain(f);
+    assert(!rtaa_receiver_close_channel(r, RTAA_INPUT));
+    drain(f);
+    assert(f->message == 9 && f->channel == 87 && !f->body_size && !f->closed);
+    assert(rtaa_receiver_key(r, 4, false, 2) == RTAA_ESTATE);
+    open_channel(f, r, 87);
+    assert(rtaa_receiver_key(r, 4, true, 3) == RTAA_ESTATE); /* must rebind */
+    assert(!send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding));
+    drain(f);
+    assert(!rtaa_receiver_key(r, 4, true, 4)); /* old pressed state was cleared */
+    drain(f);
+    open_channel(f, r, 201);
+    aap_SensorStart sensor = {10, 100};
+    assert(!send_proto(f, r, 201, 0x8001, aap_SensorStart_fields, &sensor));
+    drain(f);
+    assert(!rtaa_receiver_night(r, true));
+    drain(f);
+    assert(!send_message_flags(f, r, 201, 9, NULL, 0, RTAA_CONTROL));
+    open_channel(f, r, 201);
+    assert(rtaa_receiver_night(r, true) == RTAA_ESTATE); /* must resubscribe */
+    open_channel(f, r, 197);
+    aap_SetupRequest setup = {3};
+    aap_Start start = {42, 0};
+    assert(!send_proto(f, r, 197, 0x8000, aap_SetupRequest_fields, &setup));
+    drain(f);
+    assert(!send_proto(f, r, 197, 0x8001, aap_Start_fields, &start));
+    assert(!send_message_flags(f, r, 197, 9, NULL, 0, RTAA_CONTROL));
+    assert(f->stops == 1 && !f->closed && rtaa_receiver_state(r) == RTAA_CONNECTED);
+    open_channel(f, r, 197);
+    assert(!send_proto(f, r, 197, 0x8000, aap_SetupRequest_fields, &setup));
+    drain(f);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+
+    c = configuration(f);
+    c.protocol_minor = 4;
+    c.sink.navigation_focus = NULL;
+    assert(!rtaa_receiver_create(&c, &r));
+    connect(f, r); /* downgrade to 1.1 */
+    assert(rtaa_receiver_call_available(r, true) == RTAA_ENOTSUP && !f->writes_size);
+    focus = (aap_NavigationFocus){true, 2};
+    assert(!send_proto(f, r, 0, 13, aap_NavigationFocus_fields, &focus));
+    drain(f);
+    in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_NavigationFocus_fields, &focus) && focus.type == 1);
+    focus.type = 0;
+    assert(send_proto(f, r, 0, 13, aap_NavigationFocus_fields, &focus) == RTAA_EPROTO);
+    assert(f->closed == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+
+    c = configuration(f);
+    c.protocol_minor = 8;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL && !r);
+    c.protocol_minor = 4;
+    assert(!rtaa_receiver_create(&c, &r));
+    assert(!rtaa_receiver_start(r));
+    drain(f);
+    assert(f->message == 1 && f->body_size == 4 && f->body[3] == 4);
+    const uint8_t bad_version[] = {0, 2, 0, 1, 0, 5, 0, 0};
+    assert(inject(r, 0, 0, bad_version, sizeof(bad_version)) == RTAA_EPROTO);
+    assert(f->closed == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+}
+static void test_extension_rejection(fixture *f)
+{
+    for (unsigned i = 0; i < 4; ++i)
+    {
+        rtaa_receiver *r = create(f);
+        connect(f, r);
+        int rc;
+        if (i == 0)
+        {
+            const uint8_t bad[] = {8, 0};
+            rc = send_message(f, r, 0, 17, bad, sizeof(bad));
+        }
+        else if (i == 1)
+        {
+            const uint8_t bad[] = {8, 101};
+            rc = send_message(f, r, 0, 23, bad, sizeof(bad));
+        }
+        else if (i == 2)
+        {
+            open_channel(f, r, 87);
+            rc = send_message(f, r, 87, 9, NULL, 0); /* missing control flag */
+        }
+        else
+        {
+            const uint8_t ping[] = {0, 11, 8, 42};
+            assert(mbedtls_ssl_write(&f->server.ssl, ping, sizeof(ping)) == 4);
+            assert(mbedtls_ssl_write(&f->server.ssl, ping, sizeof(ping)) == 4);
+            /* Truncated second record must not become another channel's data. */
+            rc = inject(r, 0, RTAA_ENCRYPTED, f->server.output, f->server.output_size - 1);
+            f->server.output_size = 0;
+        }
+        assert(rc < 0 && rtaa_receiver_state(r) == RTAA_FAILED && f->closed == 1);
+        assert(!f->voice_changes && !f->batteries && !f->writes_size);
+        rtaa_receiver_destroy(r);
+        peer_free(&f->server);
+    }
+}
+static void test_fragmented_microphone(fixture *f)
+{
+    rtaa_receiver *r = create(f);
+    connect(f, r);
+    open_channel(f, r, 23);
+    aap_MicOpen mic = {true, true, true, false, true, false, true, 8};
+    assert(!send_proto(f, r, 23, 0x8005, aap_MicOpen_fields, &mic));
+    drain(f);
+    uint8_t *pcm = malloc(65520);
+    assert(pcm);
+    for (size_t i = 0; i < 65520; ++i)
+        pcm[i] = (uint8_t)(i * 31u);
+    const size_t sizes[] = {16374, 16376, 32758, 32760, 65518};
+    for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
+    {
+        unsigned before = f->fragments;
+        assert(!rtaa_receiver_microphone(r, pcm, sizes[i], 123));
+        drain(f);
+        assert(f->fragments - before == (sizes[i] + 10 + RTAA_PLAIN_MAX - 1) / RTAA_PLAIN_MAX);
+        assert(f->message == 0 && f->channel == 23 && f->body_size == sizes[i] + 8);
+        assert(f->body[7] == 123 && !memcmp(f->body + 8, pcm, sizes[i]));
+    }
+    assert(rtaa_receiver_microphone(r, pcm, 65520, 1) == RTAA_EINVAL && !f->writes_size);
+    assert(!send_message_flags(f, r, 23, 9, NULL, 0, RTAA_CONTROL));
+    assert(f->mic_changes == 2 && !f->closed);
+    open_channel(f, r, 23);
+    assert(!send_proto(f, r, 23, 0x8005, aap_MicOpen_fields, &mic));
+    drain(f);
+    assert(!rtaa_receiver_microphone(r, pcm, 2, 124));
+    drain(f);
+    aap_Ack old = aap_Ack_init_zero;
+    old.session_id = 1;
+    old.has_ack_count = true;
+    old.ack_count = 1;
+    assert(send_proto(f, r, 23, 0x8004, aap_Ack_fields, &old) == RTAA_EPROTO);
+    assert(f->closed == 1 && f->mic_changes == 4);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+    r = create(f);
+    connect(f, r);
+    open_channel(f, r, 23);
+    assert(!send_proto(f, r, 23, 0x8005, aap_MicOpen_fields, &mic));
+    drain(f);
+    f->fail_after_bytes = 20000; /* fail midway through the second frame */
+    assert(rtaa_receiver_microphone(r, pcm, 65518, 125) == RTAA_EIO);
+    assert(f->writes_size == 20000 && f->closed == 1 && f->mic_changes == 2 &&
+           rtaa_receiver_state(r) == RTAA_FAILED);
+    rtaa_statistics stats;
+    rtaa_receiver_statistics(r, &stats);
+    assert(!stats.microphone_bytes && stats.errors == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+    free(pcm);
+}
+static void test_configurable_input_and_sensors(fixture *f)
+{
+    rtaa_receiver_config c = configuration(f);
+    c.input_keycode_count = 32;
+    for (unsigned i = 0; i < 31; ++i)
+        c.input_keycodes[i] = i + 1;
+    c.input_keycodes[31] = 65536; /* exercise bit 31, not an 8-bit key mask */
+    c.sink.sensor_start = sensor_start;
+    c.sink.sensor_stop = sensor_stop;
+    rtaa_receiver *r;
+    assert(!rtaa_receiver_create(&c, &r));
+    connect(f, r);
+    aap_Discovery discovery = aap_Discovery_init_zero;
+    pb_istream_t in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_Discovery_fields, &discovery));
+    assert(discovery.channels[RTAA_INPUT].input.keycodes_count == 32);
+    assert(discovery.channels[RTAA_INPUT].input.keycodes[31] == 65536);
+    open_channel(f, r, 87);
+    assert(rtaa_receiver_rotary(r, -3, 10) == RTAA_ESTATE);
+    aap_Binding binding = aap_Binding_init_zero;
+    binding.keycodes_count = 32;
+    memcpy(binding.keycodes, c.input_keycodes, sizeof(c.input_keycodes));
+    assert(!send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding));
+    drain(f);
+    assert(!rtaa_receiver_rotary(r, -3, 10));
+    drain(f);
+    aap_InputEvent event = aap_InputEvent_init_zero;
+    in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_InputEvent_fields, &event));
+    assert(event.has_relative && event.relative.events_count == 1 &&
+           event.relative.events[0].scan_code == 65536 && event.relative.events[0].delta == -3);
+    assert(rtaa_receiver_rotary(r, 0, 11) == RTAA_EINVAL && !f->writes_size);
+    assert(rtaa_receiver_key(r, 65536, true, 11) == RTAA_EINVAL && !f->writes_size);
+    assert(!rtaa_receiver_key(r, 22, true, 12)); /* previously missing DPAD_RIGHT */
+    drain(f);
+    assert(!rtaa_receiver_key(r, 22, false, 13));
+    drain(f);
+    open_channel(f, r, 201);
+    aap_SensorStart sensor = {13, INT64_C(10000000000)};
+    assert(!send_proto(f, r, 201, 0x8001, aap_SensorStart_fields, &sensor));
+    drain(f);
+    assert(f->sensor_starts == 1 && f->sensor_type == 13 &&
+           f->sensor_interval == INT64_C(10000000000));
+    sensor.refresh_interval = 0;
+    assert(!send_proto(f, r, 201, 0x8001, aap_SensorStart_fields, &sensor));
+    drain(f);
+    assert(f->sensor_starts == 2 && !f->sensor_interval);
+    assert(!rtaa_receiver_close_channel(r, RTAA_SENSOR));
+    drain(f);
+    assert(f->sensor_stops == 1);
+    open_channel(f, r, 201);
+    sensor.type = 10;
+    f->write_error = RTAA_EIO;
+    assert(send_proto(f, r, 201, 0x8001, aap_SensorStart_fields, &sensor) == RTAA_EIO);
+    assert(f->sensor_starts == 3 && f->sensor_stops == 2 && f->closed == 1);
+    rtaa_receiver_destroy(r);
+    assert(f->sensor_stops == 2);
+    peer_free(&f->server);
+    c = configuration(f);
+    c.input_keycode_count = 33;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EBOUNDS);
+    c.input_keycode_count = 2;
+    c.input_keycodes[0] = c.input_keycodes[1] = 85;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
+    c.input_keycode_count = 0;
+    c.sink.sensor_start = sensor_start;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
+    peer_free(&f->server);
+}
 int main(void)
 {
     fixture *f = calloc(1, sizeof(*f));
@@ -601,6 +957,10 @@ int main(void)
     rtaa_receiver_destroy(r);
     peer_free(&f->server);
     test_connection(f);
+    test_control_extensions(f);
+    test_extension_rejection(f);
+    test_fragmented_microphone(f);
+    test_configurable_input_and_sensors(f);
     free(f);
     printf("receiver: PASS; core storage=%zu bytes\n", rtaa_receiver_storage_size());
     return 0;

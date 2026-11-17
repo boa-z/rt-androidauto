@@ -28,15 +28,16 @@ struct rtaa_receiver
     bool ping_pending, mic_open, night_subscribed, driving_subscribed, closed;
     bool touching;
     uint16_t touch_id, touch_x, touch_y;
-    uint8_t bound_keys, pressed_keys;
+    uint32_t bound_keys, pressed_keys;
+    uint16_t protocol_minor;
     rtaa_statistics stats;
 };
 static const uint32_t input_keys[] = {3, 4, 5, 6, 19, 20, 21, 23};
-static uint8_t key_mask(uint32_t key)
+static uint32_t key_mask(const rtaa_receiver *r, uint32_t key)
 {
-    for (unsigned i = 0; i < sizeof(input_keys) / sizeof(input_keys[0]); ++i)
-        if (input_keys[i] == key)
-            return (uint8_t)(1u << i);
+    for (unsigned i = 0; i < r->c.input_keycode_count; ++i)
+        if (r->c.input_keycodes[i] == key)
+            return UINT32_C(1) << i;
     return 0;
 }
 size_t rtaa_receiver_storage_size(void)
@@ -59,20 +60,42 @@ static void transition(rtaa_receiver *r, rtaa_state state, int error)
     if (r->c.sink.state)
         r->c.sink.state(r->c.sink.ctx, state, error);
 }
+static void retire_channel(rtaa_receiver *r, rtaa_role role)
+{
+    channel *c = &r->channels[role];
+    if (c->streaming && role != RTAA_MIC && r->c.sink.stop)
+        r->c.sink.stop(r->c.sink.ctx, role);
+    if (role == RTAA_MIC && r->mic_open)
+    {
+        r->c.sink.microphone(r->c.sink.ctx, false, 16000, false, false);
+        r->mic_open = false;
+    }
+    if (role == RTAA_INPUT)
+    {
+        r->touching = false;
+        r->bound_keys = r->pressed_keys = 0;
+    }
+    if (role == RTAA_SENSOR)
+    {
+        if (r->c.sink.sensor_stop)
+        {
+            if (r->night_subscribed)
+                r->c.sink.sensor_stop(r->c.sink.ctx, 10);
+            if (r->driving_subscribed)
+                r->c.sink.sensor_stop(r->c.sink.ctx, 13);
+        }
+        r->night_subscribed = r->driving_subscribed = false;
+    }
+    c->open = c->setup = c->streaming = c->bound = false;
+    c->window = c->outstanding = 0;
+    /* Keep session monotonically increasing across microphone reopens so a
+     * delayed ACK for the previous stream cannot free the new stream window. */
+    rtaa_assembly_reset(&c->assembly);
+}
 static void retire(rtaa_receiver *r)
 {
     for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
-    {
-        channel *c = &r->channels[i];
-        if (c->streaming && i != RTAA_MIC && r->c.sink.stop)
-            r->c.sink.stop(r->c.sink.ctx, (rtaa_role)i);
-        c->open = c->setup = c->streaming = c->bound = false;
-        c->outstanding = 0;
-        rtaa_assembly_reset(&c->assembly);
-    }
-    if (r->mic_open && r->c.sink.microphone)
-        r->c.sink.microphone(r->c.sink.ctx, false, 16000, false, false);
-    r->mic_open = false;
+        retire_channel(r, (rtaa_role)i);
     r->touching = false;
     r->bound_keys = r->pressed_keys = 0;
     if (!r->closed)
@@ -95,38 +118,76 @@ static int fail(rtaa_receiver *r, int rc)
     }
     return rc;
 }
-static int raw_frame(rtaa_receiver *r, uint8_t id, uint8_t flags, const uint8_t *data, size_t size)
+static int raw_fragment(rtaa_receiver *r, uint8_t id, uint8_t flags, uint32_t total,
+                        const uint8_t *data, size_t size)
 {
-    rtaa_frame f = {id, flags | RTAA_FIRST | RTAA_LAST, 0, data, size};
+    rtaa_frame f = {id, flags, total, data, size};
     size_t written;
     int rc = rtaa_frame_encode(&f, r->wire, sizeof(r->wire), &written);
     if (!rc)
         rc = rtaa_write_all(&r->c.transport, r->wire, written, r->c.io_timeout_ms);
     return rc;
 }
+static int send_parts(rtaa_receiver *r, uint8_t id, uint16_t message, const uint8_t *prefix,
+                      size_t prefix_size, const uint8_t *body, size_t size, bool encrypted,
+                      bool control)
+{
+    /* Bounded scatter/gather avoids a message-sized copy or a large RTOS
+     * stack buffer. Total is the plaintext size, including the message ID. */
+    if (prefix_size > 65526 || size > 65526 - prefix_size)
+        return RTAA_EBOUNDS;
+    uint8_t header[2] = {(uint8_t)(message >> 8), (uint8_t)message};
+    const uint8_t *parts[] = {header, prefix, body};
+    const size_t lengths[] = {2, prefix_size, size};
+    size_t total = 2 + prefix_size + size;
+    size_t offset = 0, part = 0, used = 0;
+    while (offset < total)
+    {
+        size_t chunk = total - offset;
+        if (chunk > sizeof(r->message))
+            chunk = sizeof(r->message);
+        for (size_t copied = 0; copied < chunk;)
+        {
+            if (used == lengths[part])
+            {
+                ++part;
+                used = 0;
+                continue;
+            }
+            size_t count = lengths[part] - used;
+            if (count > chunk - copied)
+                count = chunk - copied;
+            memcpy(r->message + copied, parts[part] + used, count);
+            copied += count;
+            used += count;
+        }
+        const uint8_t *data = r->message;
+        size_t n = chunk;
+        int rc = RTAA_OK;
+        if (encrypted)
+        {
+            rc = rtaa_tls_encrypt(r->tls, data, n);
+            if (!rc)
+                rc = rtaa_tls_output(r->tls, r->cipher, sizeof(r->cipher), &n);
+            data = r->cipher;
+        }
+        uint8_t flags = (encrypted ? RTAA_ENCRYPTED : 0) | (control ? RTAA_CONTROL : 0);
+        if (!offset)
+            flags |= RTAA_FIRST;
+        if (offset + chunk == total)
+            flags |= RTAA_LAST;
+        if (!rc)
+            rc = raw_fragment(r, id, flags, (uint32_t)total, data, n);
+        if (rc)
+            return rc; /* Never emit the tail of a failed message. */
+        offset += chunk;
+    }
+    return RTAA_OK;
+}
 static int send_body(rtaa_receiver *r, uint8_t id, uint16_t message, const uint8_t *body,
                      size_t size, bool encrypted, bool control)
 {
-    if (size > sizeof(r->message) - 2)
-        return RTAA_EBOUNDS;
-    r->message[0] = (uint8_t)(message >> 8);
-    r->message[1] = (uint8_t)message;
-    if (size)
-        memcpy(r->message + 2, body, size);
-    size_t n = size + 2;
-    const uint8_t *p = r->message;
-    int rc = 0;
-    if (encrypted)
-    {
-        rc = rtaa_tls_encrypt(r->tls, p, n);
-        if (!rc)
-            rc = rtaa_tls_output(r->tls, r->cipher, sizeof(r->cipher), &n);
-        p = r->cipher;
-    }
-    if (!rc)
-        rc =
-            raw_frame(r, id, (encrypted ? RTAA_ENCRYPTED : 0) | (control ? RTAA_CONTROL : 0), p, n);
-    return rc;
+    return send_parts(r, id, message, NULL, 0, body, size, encrypted, control);
 }
 static int send_pb(rtaa_receiver *r, uint8_t id, uint16_t message, const pb_msgdesc_t *fields,
                    const void *value, bool encrypted, bool control)
@@ -228,8 +289,9 @@ static int discovery(rtaa_receiver *r)
             c->input.has_touchscreen = true;
             c->input.touchscreen.width = r->c.geometry.frame_width;
             c->input.touchscreen.height = r->c.geometry.frame_height;
-            c->input.keycodes_count = 8;
-            memcpy(c->input.keycodes, input_keys, sizeof(input_keys));
+            c->input.keycodes_count = r->c.input_keycode_count;
+            memcpy(c->input.keycodes, r->c.input_keycodes,
+                   r->c.input_keycode_count * sizeof(uint32_t));
         }
         else
         {
@@ -252,6 +314,46 @@ static int role_by_id(rtaa_receiver *r, uint8_t id)
 }
 static int control_message(rtaa_receiver *r, uint16_t message, const uint8_t *p, size_t n)
 {
+    if (message == 13 || message == 17 || message == 23)
+    {
+        if (r->state != RTAA_CONNECTED)
+            return RTAA_ESTATE;
+        if (message == 13)
+        {
+            aap_NavigationFocus v = aap_NavigationFocus_init_zero;
+            int rc = decode(aap_NavigationFocus_fields, &v, p, n);
+            if (rc || !v.has_type || (v.type != 1 && v.type != 2))
+                return RTAA_EPROTO;
+            int owner =
+                r->c.sink.navigation_focus ? r->c.sink.navigation_focus(r->c.sink.ctx, v.type) : 1;
+            if (owner < 0)
+                return owner;
+            if (owner != 1 && owner != 2)
+                return RTAA_EINVAL;
+            v.type = (uint32_t)owner;
+            return send_pb(r, 0, 14, aap_NavigationFocus_fields, &v, true, true);
+        }
+        if (message == 17)
+        {
+            aap_VoiceSession v = aap_VoiceSession_init_zero;
+            int rc = decode(aap_VoiceSession_fields, &v, p, n);
+            if (rc || !v.has_session_type || (v.session_type != 1 && v.session_type != 2))
+                return RTAA_EPROTO;
+            if (r->c.sink.voice_session)
+                r->c.sink.voice_session(r->c.sink.ctx, v.session_type == 1);
+            return RTAA_OK; /* Notification, no fabricated ACK. */
+        }
+        aap_BatteryStatus v = aap_BatteryStatus_init_zero;
+        int rc = decode(aap_BatteryStatus_fields, &v, p, n);
+        if (rc || (v.has_battery_level && v.battery_level > 100))
+            return RTAA_EPROTO;
+        rtaa_battery_status battery = {v.has_battery_level,    v.has_time_remaining_s,
+                                       v.has_critical_battery, v.battery_level,
+                                       v.time_remaining_s,     v.critical_battery};
+        if (r->c.sink.battery_status)
+            r->c.sink.battery_status(r->c.sink.ctx, &battery);
+        return RTAA_OK;
+    }
     if (message == 5)
     {
         if (r->state != RTAA_DISCOVERY)
@@ -449,12 +551,12 @@ static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, c
             return RTAA_ESTATE;
         aap_Binding v = aap_Binding_init_zero;
         int rc = decode(aap_Binding_fields, &v, p, n);
-        uint8_t keys = 0;
+        uint32_t keys = 0;
         if (rc)
             return rc;
         for (pb_size_t i = 0; i < v.keycodes_count; ++i)
         {
-            uint8_t mask = key_mask(v.keycodes[i]);
+            uint32_t mask = key_mask(r, v.keycodes[i]);
             if (!mask || (keys & mask))
                 return RTAA_EPROTO;
             keys |= mask;
@@ -474,15 +576,17 @@ static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, c
         int rc = decode(aap_SensorStart_fields, &v, p, n);
         if (rc || v.refresh_interval < 0 || (v.type != 10 && v.type != 13))
             return RTAA_EPROTO;
-        rc = status(r, id, 0x8002, false);
-        if (!rc)
-        {
-            if (v.type == 10)
-                r->night_subscribed = true;
-            else
-                r->driving_subscribed = true;
-        }
-        return rc;
+        if (r->c.sink.sensor_start)
+            rc = r->c.sink.sensor_start(r->c.sink.ctx, v.type, v.refresh_interval);
+        if (rc)
+            return rc;
+        /* Record ownership before ACK: a write failure must stop a scheduler
+         * which was already started, even on its first subscription. */
+        if (v.type == 10)
+            r->night_subscribed = true;
+        else
+            r->driving_subscribed = true;
+        return status(r, id, 0x8002, false);
     }
     if (role == RTAA_MIC && message == 0x8005)
     {
@@ -495,6 +599,8 @@ static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, c
             return RTAA_ENOTSUP;
         if (v.open == r->mic_open)
             return RTAA_ESTATE;
+        if (v.open && c->session == INT32_MAX)
+            return RTAA_EBOUNDS;
         rc = r->c.sink.microphone(r->c.sink.ctx, v.open, 16000, v.ec, v.anc);
         if (rc)
             return rc;
@@ -532,12 +638,19 @@ static int on_frame(void *ctx, const rtaa_frame *frame)
             return RTAA_ESECURITY;
         int rc = rtaa_tls_ingest(r->tls, f.data, f.size);
         size_t n = 0;
-        if (!rc)
-            rc = rtaa_tls_decrypt(r->tls, r->plain, sizeof(r->plain), &n);
-        /* The supported AAP profile uses one TLS application record per frame.
-         * Do not silently associate a delayed record with a different channel. */
-        if (rc || !n || rtaa_tls_pending(r->tls))
-            return RTAA_ESECURITY;
+        do
+        {
+            size_t count = 0;
+            if (!rc && n < sizeof(r->plain))
+                rc = rtaa_tls_decrypt(r->tls, r->plain + n, sizeof(r->plain) - n, &count);
+            if (rc || !count)
+                return RTAA_ESECURITY;
+            n += count;
+            if (n == sizeof(r->plain) && rtaa_tls_pending(r->tls))
+                return RTAA_EBOUNDS;
+        } while (rtaa_tls_pending(r->tls));
+        /* Multiple complete TLS records may carry one AAP fragment. Never
+         * associate a delayed partial record with a different channel. */
         f.data = r->plain;
         f.size = n;
     }
@@ -560,8 +673,11 @@ static int on_frame(void *ctx, const rtaa_frame *frame)
     {
         if (r->state == RTAA_VERSION && !f.channel && message == 2)
         {
-            if (n != 6 || p[0] || p[1] != 1 || p[2] || p[3] < 1 || p[4] || p[5])
+            unsigned requested_minor = r->c.protocol_minor ? r->c.protocol_minor : 1;
+            if (n != 6 || p[0] || p[1] != 1 || p[2] || p[3] < 1 || p[3] > requested_minor || p[4] ||
+                p[5])
                 return RTAA_EPROTO;
+            r->protocol_minor = p[3];
             transition(r, RTAA_TLS, 0);
             return handshake(r);
         }
@@ -581,6 +697,19 @@ static int on_frame(void *ctx, const rtaa_frame *frame)
         if (rc || v.channel_id != f.channel)
             return RTAA_EPROTO;
         return control_message(r, message, p, n);
+    }
+    if (message == 9)
+    {
+        /* Legacy transport control close has an empty protobuf body; the
+         * target is its envelope channel, not an invented body field. */
+        if (!f.channel || !(f.flags & RTAA_CONTROL) || r->state != RTAA_CONNECTED ||
+            !r->channels[role].open)
+            return RTAA_ESTATE;
+        aap_Empty empty = aap_Empty_init_zero;
+        rc = decode(aap_Empty_fields, &empty, p, n);
+        if (!rc)
+            retire_channel(r, (rtaa_role)role);
+        return rc;
     }
     return f.channel ? service_message(r, (rtaa_role)role, message, p, n)
                      : control_message(r, message, p, n);
@@ -604,10 +733,21 @@ int rtaa_receiver_create(const rtaa_receiver_config *config, rtaa_receiver **out
         !config->session_timeout_ms || !config->heartbeat_ms ||
         config->heartbeat_ms >= config->session_timeout_ms ||
         rtaa_geometry_validate(&config->geometry) || config->geometry.frame_width != 1280 ||
-        config->geometry.frame_height != 720 || !valid_name(config->name) ||
+        config->geometry.frame_height != 720 || config->protocol_minor > 7 ||
+        !valid_name(config->name) || (!!config->sink.sensor_start != !!config->sink.sensor_stop) ||
         !valid_name(config->manufacturer) || !valid_name(config->model))
         return RTAA_EINVAL;
     size_t total = sizeof(rtaa_receiver) + rtaa_tls_storage_size();
+    if (config->input_keycode_count > 32)
+        return RTAA_EBOUNDS;
+    for (unsigned i = 0; i < config->input_keycode_count; ++i)
+    {
+        if (!config->input_keycodes[i] || config->input_keycodes[i] > INT32_MAX)
+            return RTAA_EINVAL;
+        for (unsigned j = 0; j < i; ++j)
+            if (config->input_keycodes[i] == config->input_keycodes[j])
+                return RTAA_EINVAL;
+    }
     bool any = false;
     for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
     {
@@ -634,6 +774,11 @@ int rtaa_receiver_create(const rtaa_receiver_config *config, rtaa_receiver **out
         return RTAA_EBOUNDS;
     memset(r, 0, sizeof(*r));
     r->c = *config;
+    if (!r->c.input_keycode_count)
+    {
+        r->c.input_keycode_count = sizeof(input_keys) / sizeof(input_keys[0]);
+        memcpy(r->c.input_keycodes, input_keys, sizeof(input_keys));
+    }
     r->control = (rtaa_assembly){0, 0, r->control_data, sizeof(r->control_data), 0, 0, false};
     for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
     {
@@ -681,7 +826,7 @@ int rtaa_receiver_start(rtaa_receiver *r)
     rtaa_parser_reset(&r->parser);
     r->last_rx = now(r);
     transition(r, RTAA_VERSION, 0);
-    static const uint8_t version[] = {0, 1, 0, 1};
+    uint8_t version[] = {0, 1, 0, r->c.protocol_minor ? (uint8_t)r->c.protocol_minor : 1};
     int rc = send_body(r, 0, 1, version, sizeof(version), false, false);
     return rc ? fail(r, rc) : RTAA_OK;
 }
@@ -770,9 +915,11 @@ int rtaa_receiver_key(rtaa_receiver *r, uint32_t key, bool pressed, uint64_t us)
 {
     if (!ready(r, RTAA_INPUT) || !r->channels[RTAA_INPUT].bound)
         return RTAA_ESTATE;
-    uint8_t mask = key_mask(key);
+    uint32_t mask = key_mask(r, key);
     if (!(r->bound_keys & mask))
         return RTAA_ENOTSUP;
+    if (key == 65536)
+        return RTAA_EINVAL; /* Rotary is a relative axis, not a button. */
     if (((r->pressed_keys & mask) != 0) == pressed)
         return RTAA_ESTATE;
     aap_InputEvent v = aap_InputEvent_init_zero;
@@ -788,8 +935,25 @@ int rtaa_receiver_key(rtaa_receiver *r, uint32_t key, bool pressed, uint64_t us)
     if (pressed)
         r->pressed_keys |= mask;
     else
-        r->pressed_keys &= (uint8_t)~mask;
+        r->pressed_keys &= ~mask;
     return RTAA_OK;
+}
+int rtaa_receiver_rotary(rtaa_receiver *r, int32_t delta, uint64_t us)
+{
+    if (!ready(r, RTAA_INPUT) || !r->channels[RTAA_INPUT].bound)
+        return RTAA_ESTATE;
+    if (!(r->bound_keys & key_mask(r, 65536)))
+        return RTAA_ENOTSUP;
+    if (!delta)
+        return RTAA_EINVAL;
+    aap_InputEvent v = aap_InputEvent_init_zero;
+    v.timestamp = us;
+    v.has_relative = true;
+    v.relative.events_count = 1;
+    v.relative.events[0] = (aap_RelativeInput){65536, delta};
+    int rc =
+        send_pb(r, r->c.channels[RTAA_INPUT].id, 0x8001, aap_InputEvent_fields, &v, true, false);
+    return rc ? fail(r, rc) : RTAA_OK;
 }
 int rtaa_receiver_night(rtaa_receiver *r, bool night)
 {
@@ -818,15 +982,14 @@ int rtaa_receiver_microphone(rtaa_receiver *r, const uint8_t *pcm, size_t n, uin
     if (!ready(r, RTAA_MIC) || !r->mic_open)
         return RTAA_ESTATE;
     channel *c = &r->channels[RTAA_MIC];
-    if (!pcm || !n || n % 2 || n > RTAA_PLAIN_MAX - 10)
+    if (!pcm || !n || n % 2 || n > 65518)
         return RTAA_EINVAL;
     if (c->outstanding >= c->window)
         return RTAA_AGAIN;
-    uint8_t buffer[RTAA_PLAIN_MAX - 2];
+    uint8_t buffer[8];
     for (unsigned i = 0; i < 8; ++i)
         buffer[i] = (uint8_t)(us >> (56 - 8 * i));
-    memcpy(buffer + 8, pcm, n);
-    int rc = send_body(r, c->assembly.channel, 0, buffer, n + 8, true, false);
+    int rc = send_parts(r, c->assembly.channel, 0, buffer, sizeof(buffer), pcm, n, true, false);
     if (rc)
         return fail(r, rc);
     ++c->outstanding;
@@ -847,6 +1010,32 @@ int rtaa_receiver_shutdown(rtaa_receiver *r)
 rtaa_state rtaa_receiver_state(const rtaa_receiver *r)
 {
     return r ? r->state : RTAA_FAILED;
+}
+uint16_t rtaa_receiver_protocol_minor(const rtaa_receiver *r)
+{
+    return r ? r->protocol_minor : 0;
+}
+int rtaa_receiver_call_available(rtaa_receiver *r, bool available)
+{
+    if (!r || r->state != RTAA_CONNECTED)
+        return RTAA_ESTATE;
+    if (r->protocol_minor < 4)
+        return RTAA_ENOTSUP;
+    aap_CallAvailability v = {true, available};
+    int rc = send_pb(r, 0, 24, aap_CallAvailability_fields, &v, true, true);
+    return rc ? fail(r, rc) : RTAA_OK;
+}
+int rtaa_receiver_close_channel(rtaa_receiver *r, rtaa_role role)
+{
+    if ((unsigned)role >= RTAA_ROLE_COUNT)
+        return RTAA_EINVAL;
+    if (!ready(r, role))
+        return RTAA_ESTATE;
+    int rc = send_body(r, r->c.channels[role].id, 9, NULL, 0, true, true);
+    if (rc)
+        return fail(r, rc);
+    retire_channel(r, role);
+    return RTAA_OK;
 }
 int rtaa_receiver_error(const rtaa_receiver *r)
 {

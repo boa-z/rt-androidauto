@@ -22,3 +22,13 @@ The implementation reuses nanopb's existing tested C codec directly and adapts t
 The full AASDK, OpenAuto and Rust applications were not copied wholesale because their scheduler, language runtime and media/platform dependencies do not fit the requested C11 portable core directly. Their richer state machines remain important follow-up references. This first receiver dispatcher is deliberately smaller and does not claim their feature completeness, reliability history or modern compatibility.
 
 Before implementing wireless, compare OpenAuto Prodigy's actual RFCOMM/SDP/Wi-Fi state machine and Open Android Auto's field-level evidence. In particular, do not advertise developer Head Unit Server TCP access as production wireless startup, and do not equate an AP/TCP demo with verified Bluetooth pairing and automatic launch.
+
+## Wireless follow-up reference
+
+On 2026-11-17, additionally inspected
+[WirelessAndroidAutoDongle](https://github.com/nisargjhaveri/WirelessAndroidAutoDongle/tree/ef645221ec28e87361391b9bdcf27e31ff48cb6f)
+at `ef645221ec28e87361391b9bdcf27e31ff48cb6f` (root GPL-3.0 LICENSE).
+It uses BlueZ SDP/profile registration, RFCOMM start/credentials and TCP-to-USB
+forwarding; it is not a native AAP receiver. No runtime code was copied or run.
+See `wired-extensions.md` for differences between its credential exchange,
+Prodigy's status IDs and the newer protocol-reference table.
