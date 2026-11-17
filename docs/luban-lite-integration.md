@@ -1,5 +1,7 @@
 # Luban-Lite integration preparation
 
+Current product direction (2026-11-17): the independent multi-protocol demo is `application/rt-thread/rtprojection`; its Android Auto backend is under `backends/androidauto`. The shared protocol-neutral renderer stays in `application/rt-thread/rtcarplay/ui/demo_ui.c` and receives an application backend interface. The separate `rtandroidauto` app was consolidated into that backend. The notes below also describe the earlier combined-in-place plan; they do not require putting Android Auto inside the CarPlay protocol SDK. Same-image dual-protocol switching remains a later milestone.
+
 This document records inspected integration boundaries and the next implementation work. It is not an assertion that the SDK is integrated. The product checkout was `C:\Project\Carplay\luban-lite-carplay` on `carplay-oss`; five existing launcher/fusion UI files were dirty. They were preserved. No product source or workflow was changed, no branch/commit/push was made, and no fake submodule was created.
 
 ## Required sequencing

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "rtaa/receiver.h"
+#include "rtaa/connection.h"
 #include "peer.h"
 #include "aap.pb.h"
 #include <pb_encode.h>
@@ -16,6 +17,7 @@ typedef struct
     uint64_t time;
     unsigned starts, stops, media, cancelled, closed, mic_changes;
     bool reject;
+    int write_error;
 } fixture;
 static uint64_t milliseconds(void *ctx)
 {
@@ -25,6 +27,8 @@ static int write_transport(void *ctx, const uint8_t *p, size_t n, uint32_t timeo
 {
     fixture *f = ctx;
     assert(timeout && n);
+    if (f->write_error)
+        return f->write_error;
     if (n > 17)
         n = 17; /* force partial USB writes */
     assert(n <= sizeof(f->writes) - f->writes_size);
@@ -150,7 +154,7 @@ static int send_proto(fixture *f, rtaa_receiver *r, uint8_t id, uint16_t message
     assert(pb_encode(&out, desc, value));
     return send_message(f, r, id, message, body, out.bytes_written);
 }
-static rtaa_receiver *create(fixture *f)
+static rtaa_receiver_config configuration(fixture *f)
 {
     memset(f, 0, sizeof(*f));
     peer_init(&f->server);
@@ -174,13 +178,19 @@ static rtaa_receiver *create(fixture *f)
     c.session_timeout_ms = 5000;
     c.heartbeat_ms = 1000;
     c.memory_limit = 1024 * 1024;
+    return c;
+}
+static rtaa_receiver *create(fixture *f)
+{
+    rtaa_receiver_config c = configuration(f);
     rtaa_receiver *r;
     assert(!rtaa_receiver_create(&c, &r));
     return r;
 }
 static void connect(fixture *f, rtaa_receiver *r)
 {
-    assert(!rtaa_receiver_start(r));
+    if (rtaa_receiver_state(r) == RTAA_IDLE)
+        assert(!rtaa_receiver_start(r));
     drain(f);
     assert(f->message == 1);
     uint8_t version[] = {0, 2, 0, 1, 0, 1, 0, 0};
@@ -220,6 +230,219 @@ static void open_channel(fixture *f, rtaa_receiver *r, uint8_t id)
     drain(f);
     assert(f->message == 8 && f->channel == id);
 }
+typedef struct
+{
+    fixture *f;
+    unsigned opens, abandoned;
+    int result;
+    bool late;
+    size_t live, allocations, fail_at;
+} connector_fixture;
+static void *connection_allocate(void *ctx, size_t size)
+{
+    connector_fixture *f = ctx;
+    if (++f->allocations == f->fail_at)
+        return NULL;
+    void *p = calloc(1, size);
+    assert(p);
+    ++f->live;
+    return p;
+}
+static void connection_release(void *ctx, void *p)
+{
+    connector_fixture *f = ctx;
+    assert(p && f->live);
+    --f->live;
+    free(p);
+}
+static uint64_t connector_clock(void *ctx)
+{
+    return ((connector_fixture *)ctx)->f->time;
+}
+static int connector_open(void *ctx, uint32_t remaining, rtaa_transport *out)
+{
+    connector_fixture *f = ctx;
+    ++f->opens;
+    assert(remaining && remaining <= 100);
+    /* Opening a new peer must not overlap any previous owned transport. */
+    assert(f->opens == 1 || f->f->closed || f->abandoned);
+    if (f->result)
+        return f->result;
+    if (f->late)
+        f->f->time += remaining;
+    peer_free(&f->f->server);
+    peer_init(&f->f->server);
+    rtaa_parser_reset(&f->f->parser);
+    f->f->writes_size = 0;
+    *out = (rtaa_transport){f->f,           NULL, write_transport, milliseconds, cancel_transport,
+                            close_transport};
+    return RTAA_OK;
+}
+static void connector_abandon(void *ctx)
+{
+    ++((connector_fixture *)ctx)->abandoned;
+}
+static rtaa_connection_config connection_config(connector_fixture *f, fixture *session)
+{
+    memset(f, 0, sizeof(*f));
+    f->f = session;
+    rtaa_connection_config c = {0};
+    c.receiver = configuration(session);
+    c.receiver.memory = (rtaa_allocator){f, connection_allocate, connection_release};
+    c.receiver.tls.memory = c.receiver.memory;
+    c.connector = (rtaa_connector){f, connector_open, connector_abandon, connector_clock};
+    c.max_attempts = 3;
+    c.open_timeout_ms = 100;
+    c.retry_delay_ms = 10;
+    c.retry_delay_max_ms = 15;
+    return c;
+}
+static void expect_status(rtaa_connection *c, rtaa_connection_state state, uint32_t attempts,
+                          int error)
+{
+    rtaa_connection_status status;
+    rtaa_connection_get_status(c, &status);
+    assert(status.state == state && status.attempts == attempts && status.last_error == error);
+}
+static void test_connection(fixture *session)
+{
+    connector_fixture f;
+    rtaa_connection_config config = connection_config(&f, session);
+    rtaa_connection *c;
+    assert(!rtaa_connection_create(&config, &c));
+    assert(!rtaa_connection_start(c));
+    assert(rtaa_connection_start(c) == RTAA_ESTATE);
+    assert(!rtaa_connection_poll(c));
+    connect(session, rtaa_connection_receiver(c)); /* real TLS + discovery */
+    session->time = 5000;
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN);
+    expect_status(c, RTAA_CONNECTION_WAITING, 1, RTAA_ETIMEOUT);
+    assert(session->closed == 1 && session->cancelled == 1 && f.live == 1);
+    session->time = 5009;
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN && f.opens == 1);
+    session->time = 5010;
+    assert(!rtaa_connection_poll(c));
+    connect(session, rtaa_connection_receiver(c));
+    /* A send failure outside poll retains EIO and closes the old session before
+     * the connection layer retries. A successful connect must not reset count. */
+    open_channel(session, rtaa_connection_receiver(c), 87);
+    aap_Binding binding = aap_Binding_init_zero;
+    assert(!send_proto(session, rtaa_connection_receiver(c), 87, 0x8002, aap_Binding_fields,
+                       &binding));
+    drain(session);
+    session->write_error = RTAA_EIO;
+    assert(rtaa_receiver_touch(rtaa_connection_receiver(c), 0, 0, 1, 1, 1) == RTAA_EIO);
+    assert(session->closed == 2);
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN);
+    expect_status(c, RTAA_CONNECTION_WAITING, 2, RTAA_EIO);
+    session->time = 5024;
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN && f.opens == 2);
+    session->time = 5025;
+    session->write_error = 0;
+    assert(!rtaa_connection_poll(c));
+    connect(session, rtaa_connection_receiver(c));
+    session->time += 5000;
+    assert(rtaa_connection_poll(c) == RTAA_ETIMEOUT);
+    expect_status(c, RTAA_CONNECTION_EXHAUSTED, 3, RTAA_ETIMEOUT);
+    assert(f.opens == 3 && !f.abandoned && session->closed == 3 && f.live == 1);
+    assert(rtaa_connection_poll(c) == RTAA_ESTATE);
+    /* Explicit restart resets the bounded cycle. Peer shutdown does not retry. */
+    assert(!rtaa_connection_start(c) && !rtaa_connection_poll(c));
+    connect(session, rtaa_connection_receiver(c));
+    aap_Shutdown shutdown = {1};
+    assert(
+        !send_proto(session, rtaa_connection_receiver(c), 0, 15, aap_Shutdown_fields, &shutdown));
+    drain(session);
+    assert(!rtaa_connection_poll(c));
+    expect_status(c, RTAA_CONNECTION_STOPPED, 1, 0);
+    assert(session->closed == 4 && !rtaa_connection_receiver(c));
+    rtaa_connection_stop(c);
+    rtaa_connection_destroy(c);
+    assert(!f.live && session->closed == 4);
+    peer_free(&session->server);
+
+    /* Pending-open deadlines, capped backoff, cancellation and no busy loop. */
+    config = connection_config(&f, session);
+    assert(!rtaa_connection_create(&config, &c));
+    f.result = RTAA_AGAIN;
+    assert(!rtaa_connection_start(c));
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN);
+    session->time = 100;
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN && f.abandoned == 1);
+    session->time = 110;
+    f.result = RTAA_EIO;
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN && f.abandoned == 2);
+    session->time = 124;
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN && f.opens == 2);
+    session->time = 125;
+    assert(rtaa_connection_poll(c) == RTAA_EIO && f.abandoned == 3);
+    expect_status(c, RTAA_CONNECTION_EXHAUSTED, 3, RTAA_EIO);
+    assert(!rtaa_connection_start(c));
+    rtaa_connection_stop(c); /* even before the first open step */
+    rtaa_connection_stop(c);
+    assert(f.abandoned == 4 && !rtaa_connection_receiver(c));
+    rtaa_connection_destroy(c);
+    assert(!f.live && !session->closed);
+    peer_free(&session->server);
+
+    /* Failed/invalid opens and over-deadline success retire exactly one owner. */
+    const int terminal[] = {RTAA_ESECURITY, RTAA_EPROTO, RTAA_EINVAL, RTAA_ECANCEL, 2};
+    for (unsigned i = 0; i < sizeof(terminal) / sizeof(terminal[0]); ++i)
+    {
+        config = connection_config(&f, session);
+        f.result = terminal[i];
+        assert(!rtaa_connection_create(&config, &c) && !rtaa_connection_start(c));
+        int expected = terminal[i] < 0 ? terminal[i] : RTAA_EINVAL;
+        assert(rtaa_connection_poll(c) == expected && f.abandoned == 1);
+        expect_status(c, RTAA_CONNECTION_EXHAUSTED, 1, expected);
+        rtaa_connection_destroy(c);
+        assert(!f.live && !session->closed);
+        peer_free(&session->server);
+    }
+    config = connection_config(&f, session);
+    f.late = true;
+    assert(!rtaa_connection_create(&config, &c) && !rtaa_connection_start(c));
+    assert(rtaa_connection_poll(c) == RTAA_AGAIN);
+    assert(session->closed == 1 && !f.abandoned);
+    rtaa_connection_destroy(c);
+    assert(!f.live);
+    peer_free(&session->server);
+
+    /* Fail every SDK allocation (controller, receiver, channels, TLS wrapper).
+     * mbedTLS's internal allocator is separately covered by the TLS backend. */
+    size_t count = 0;
+    for (size_t failure_at = 0; failure_at <= count; ++failure_at)
+    {
+        config = connection_config(&f, session);
+        f.fail_at = failure_at;
+        int rc = rtaa_connection_create(&config, &c);
+        if (!rc)
+        {
+            assert(!rtaa_connection_start(c));
+            rc = rtaa_connection_poll(c);
+            if (!failure_at)
+                count = f.allocations;
+            else
+                assert(rc == RTAA_EBOUNDS && session->closed == 1);
+            rtaa_connection_destroy(c);
+        }
+        else
+            assert(failure_at == 1 && rc == RTAA_EBOUNDS && !session->closed);
+        assert(!f.live);
+        peer_free(&session->server);
+    }
+    config = connection_config(&f, session);
+    assert(!rtaa_connection_create(&config, &c) && !rtaa_connection_start(c));
+    assert(!rtaa_connection_poll(c));
+    /* Production frame parser failure through the connection API is terminal. */
+    const uint8_t bad[] = {0, 0x80, 0, 0};
+    assert(rtaa_connection_feed(c, bad, sizeof(bad)) == RTAA_EPROTO);
+    expect_status(c, RTAA_CONNECTION_EXHAUSTED, 1, RTAA_EPROTO);
+    assert(session->closed == 1 && f.live == 1);
+    rtaa_connection_destroy(c);
+    assert(!f.live);
+    peer_free(&session->server);
+}
 int main(void)
 {
     fixture *f = calloc(1, sizeof(*f));
@@ -251,15 +474,45 @@ int main(void)
     }
     open_channel(f, r, 87);
     aap_Binding binding = aap_Binding_init_zero;
+    binding.keycodes_count = 1;
+    binding.keycodes[0] = 4;
     assert(!send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding));
     drain(f);
     assert(rtaa_receiver_touch(r, 0, 0, 768, 1, 99) == RTAA_EBOUNDS && !f->writes_size);
+    assert(rtaa_receiver_touch(r, 2, 0, 1, 1, 99) == RTAA_ESTATE && !f->writes_size);
+    assert(rtaa_receiver_touch(r, 1, 0, 1, 1, 99) == RTAA_ESTATE && !f->writes_size);
     assert(!rtaa_receiver_touch(r, 0, 0, 0, 0, 99));
     drain(f);
     aap_InputEvent input = aap_InputEvent_init_zero;
     in = pb_istream_from_buffer(f->body, f->body_size);
     assert(pb_decode(&in, aap_InputEvent_fields, &input) && input.touch.locations[0].x == 256);
+    assert(rtaa_receiver_touch(r, 0, 0, 1, 1, 100) == RTAA_ESTATE && !f->writes_size);
+    assert(rtaa_receiver_touch(r, 2, 1, 1, 1, 100) == RTAA_ESTATE && !f->writes_size);
+    assert(rtaa_receiver_touch(r, 2, 0, 768, 1, 100) == RTAA_EBOUNDS && !f->writes_size);
+    assert(!rtaa_receiver_touch(r, 2, 0, 767, 599, 100));
+    drain(f);
+    assert(!rtaa_receiver_touch(r, 1, 0, 1023, 599, 101));
+    drain(f);
+    input = (aap_InputEvent)aap_InputEvent_init_zero;
+    in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_InputEvent_fields, &input));
+    assert(input.touch.action == 1 && input.touch.action_index == 0 &&
+           input.touch.locations[0].x == 1023 && input.touch.locations[0].y == 659);
+    assert(!rtaa_receiver_touch_cancel(r, 102) && !f->writes_size);
+    assert(!rtaa_receiver_touch(r, 0, 7, 1, 1, 103));
+    drain(f);
+    assert(!rtaa_receiver_touch_cancel(r, 104));
+    drain(f);
+    input = (aap_InputEvent)aap_InputEvent_init_zero;
+    in = pb_istream_from_buffer(f->body, f->body_size);
+    assert(pb_decode(&in, aap_InputEvent_fields, &input));
+    assert(input.touch.action == 1 && input.touch.locations[0].pointer_id == 7);
+    assert(rtaa_receiver_key(r, 3, true, 105) == RTAA_ENOTSUP && !f->writes_size);
+    assert(rtaa_receiver_key(r, 4, false, 105) == RTAA_ESTATE && !f->writes_size);
     assert(!rtaa_receiver_key(r, 4, true, 100));
+    drain(f);
+    assert(rtaa_receiver_key(r, 4, true, 101) == RTAA_ESTATE && !f->writes_size);
+    assert(!rtaa_receiver_key(r, 4, false, 102));
     drain(f);
     open_channel(f, r, 201);
     aap_SensorStart sensor = {10, 100};
@@ -316,6 +569,38 @@ int main(void)
     assert(rtaa_receiver_state(r) == RTAA_FAILED);
     rtaa_receiver_destroy(r);
     peer_free(&f->server);
+    r = create(f);
+    connect(f, r);
+    open_channel(f, r, 87);
+    binding = (aap_Binding)aap_Binding_init_zero;
+    assert(!send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding));
+    drain(f);
+    assert(rtaa_receiver_key(r, 4, true, 1) == RTAA_ENOTSUP && !f->writes_size);
+    assert(!rtaa_receiver_touch(r, 0, 0, 1, 1, 1));
+    drain(f);
+    assert(send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding) == RTAA_ESTATE);
+    assert(rtaa_receiver_state(r) == RTAA_FAILED && f->closed == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+    r = create(f);
+    connect(f, r);
+    open_channel(f, r, 87);
+    binding.keycodes_count = 2;
+    binding.keycodes[0] = binding.keycodes[1] = 4;
+    assert(send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding) == RTAA_EPROTO);
+    assert(!f->writes_size && f->closed == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+    r = create(f);
+    connect(f, r);
+    open_channel(f, r, 87);
+    binding.keycodes_count = 1;
+    binding.keycodes[0] = 999;
+    assert(send_proto(f, r, 87, 0x8002, aap_Binding_fields, &binding) == RTAA_EPROTO);
+    assert(!f->writes_size && f->closed == 1);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+    test_connection(f);
     free(f);
     printf("receiver: PASS; core storage=%zu bytes\n", rtaa_receiver_storage_size());
     return 0;

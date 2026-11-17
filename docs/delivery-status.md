@@ -1,4 +1,14 @@
-# Local delivery status
+# Delivery checkpoints
+
+## 2026-11-17 follow-up
+
+The first SDK checkpoint was published as `86af84bbc69cfb97ead6ae552af8714642450dc4`. Its [Linux and Windows CI](https://github.com/boa-z/rt-androidauto/actions/runs/44038629241) both passed. The product now has a real submodule and an authorized `codex/androidauto-integration` branch. Product app and UI development is tracked in its own repository; the independent demo is `application/rt-thread/rtprojection`, with Android Auto as its first backend.
+
+This SDK follow-up implements the [bounded connection owner and negotiated input lifecycle](connection-lifecycle.md). Windows and WSL ASan/UBSan CTest each passed 5/5; the real RT-Thread port and D213 archive compiled again. Evidence for the Linux follow-up is `build/validation/linux-sanitizer-followup.log`. No hardware or DHU test was run. Wireless discovery/bootstrap and combined product switching remain pending.
+
+The remainder of this document preserves the initial checkpoint's scope and validation history; its NOT_RUN integration/publication rows describe that earlier checkpoint, not current product build results.
+
+## Initial SDK checkpoint
 
 This is the first independently buildable SDK review checkpoint, not completion of the entire Android Auto/product task. Source is in `C:\Project\Carplay\rt-androidauto`; research checkouts are under `C:\Project\Carplay\references`. The user authorized the initial SDK commit and push on 2026-11-16. This checkpoint is prepared for publication to `boa-z/rt-androidauto`; publication success and remote CI results must be verified separately. Product submodule registration remains pending the user-prepared development branch.
 

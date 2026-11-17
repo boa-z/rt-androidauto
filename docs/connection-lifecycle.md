@@ -1,0 +1,15 @@
+# Connection and input lifecycles
+
+`rtaa_connection` is a caller-driven, optional owner around a real receiver. It has no thread, UI, USB or Wi-Fi dependency. Calls, connector callbacks and borrowed receiver input operations must be serialized by one application owner.
+
+Configure a receiver template, allocator, memory budget and connector. `open(ctx, remaining_ms, transport)` performs a bounded opening step and may return `RTAA_AGAIN`. On success it transfers ownership of a fresh transport. On failure, timeout or cancellation, `abandon` synchronously releases the pending opening exactly once. After successful transfer, only the transport cancel/close callbacks own its resources. Do not free a USB URB or DMA buffer until its controller has actually stopped using it.
+
+`start` starts a new attempt cycle. `poll` or `feed` drives the receiver. Only `RTAA_EIO` and `RTAA_ETIMEOUT` trigger exponential backoff, capped at the configured maximum. The attempt limit includes the first attempt and successful connections; repeated short connections cannot reset the budget. Protocol, trust and configuration failures, explicit cancellation and peer shutdown are terminal. An explicit later `start` begins a new cycle. The configured receiver memory limit includes controller storage; mbedTLS internal allocation has the separately documented platform budget.
+
+The pointer returned by `rtaa_connection_receiver` is borrowed until the next connection call. It may be used for serialized input, statistics and graceful shutdown. Never retain/destroy it or call receiver poll/feed directly. The connection owner observes receiver API failures on its next poll and preserves their terminal error.
+
+`stop` immediately retires a pending open or receiver synchronously and is idempotent. For graceful shutdown, request receiver shutdown first and continue connection polling for the application's bounded grace period, then stop. Media adapters remain responsible for confirming their own hardware retirement before another projection backend receives those resources.
+
+Input binding confirms the supported key set. Unknown/duplicate bindings are rejected; unconfirmed keys and unpaired key up/down events are refused. Key repeat is not implemented. A single touch uses PRESS=0, RELEASE=1, DRAG=2 and a stable pointer ID. PRESS must begin inside the viewport. Out-of-bounds DRAG is refused. RELEASE outside the viewport uses the last valid position. `rtaa_receiver_touch_cancel` releases at that position, because this profile has no verified wire cancel action. Invalid lifecycle calls do not fabricate a phone gesture.
+
+The production-source receiver tests drive real TLS sessions through repeated connections, retries, exhaustion, peer shutdown, pending-open cancellation, late opens and injected allocation failures. They also exercise negotiated key masks and touch release/cancel. Windows CTest and WSL ASan/UBSan each passed 5/5 after this change, and the D213 SDK/RT-Thread archive cross-compiled. These are software checks; phone, board and DHU acceptance remain NOT_RUN.

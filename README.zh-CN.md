@@ -6,7 +6,7 @@
 
 当前交付是可独立构建、经过 Host 测试的首版 SDK，包含 C11 的 AOA 控制请求、AAP 流解析和按通道分片重组、mbedTLS TLS 1.2 后端、nanopb 服务发现、基础 H.264/PCM/麦克风会话、输入和基础传感器。协议核心不依赖 RT-Thread、D213、MPP、CherryUSB、LVGL 或 rt-carplay。可选 RT-Thread Port 提供分配器和单调时钟。
 
-**当前尚未完成附件中的全部软件开发范围。** 无线蓝牙/Wi-Fi 启动、自动重连与资源仲裁、整机 CherryUSB/MPP/音频适配、Mobility Cockpit UI 和真实 Git Submodule 集成仍待开发。本轮没有连接 Android 手机或 D213，也没有运行 DHU。Host 测试通过不能作为手机互操作或认证结论。
+**当前尚未完成全部软件开发范围。** 已实现有界重连控制器、协商按键与单指触摸生命周期；整机工程单独开发有线后端与共用 Mobility Cockpit UI，并以真实 Git Submodule 引入 SDK。无线蓝牙/Wi-Fi 启动和同一镜像内的 CarPlay/Android Auto 切换仍待完成。没有连接 Android 手机或 D213，也没有运行 DHU。Host 测试通过不能作为手机互操作或认证结论。
 
 ## 构建与验证
 
@@ -23,6 +23,8 @@ Linux 可追加 `-DRTAA_SANITIZERS=ON`。Windows Visual Studio 生成器需要�
 nanopb 运行库和生成的消息源码已随 SDK 提供。重新生成和核对协议定义时使用 `requirements-dev.txt`、`scripts/generate-proto.py` 和 `scripts/verify-protocol.py`。
 
 平台必须提供真实的传输、音视频 sink、麦克风控制、随机数和凭证信任策略。服务 Channel ID 来自实际注册和服务发现描述，不能将角色枚举值当作固定通道号。所有 Receiver API 由一个工作线程串行调用；回调不得重入同一个对象。
+
+`include/rtaa/connection.h` 提供有界重连：只对传输 I/O 错误和超时重试，达到次数上限后等待显式重新启动。输入绑定、手势与取消规则见 [连接和输入生命周期](docs/connection-lifecycle.md)。
 
 具体实现范围、验证结果、剩余工作和整机集成前置条件见 [交付状态](docs/delivery-status.md)、[协议兼容性](docs/protocol-compatibility.md)、[移植说明](docs/porting.md) 和 [Luban-Lite 集成准备](docs/luban-lite-integration.md)。
 

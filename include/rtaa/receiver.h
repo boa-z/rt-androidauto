@@ -71,14 +71,24 @@ extern "C"
     int rtaa_receiver_start(rtaa_receiver *);
     int rtaa_receiver_feed(rtaa_receiver *, const uint8_t *, size_t);
     int rtaa_receiver_poll(rtaa_receiver *);
+    /* Single pointer: PRESS=0, RELEASE=1, DRAG=2. A press must begin inside
+     * the viewport. Drags outside return EBOUNDS without forwarding coordinates;
+     * an outside release ends the captured gesture at its last valid position.
+     * ID must match the captured press. Calls must be serialized. */
     int rtaa_receiver_touch(rtaa_receiver *, uint8_t action, uint16_t id, uint16_t x, uint16_t y,
                             uint64_t us);
+    /* AAP has no verified cancel action in this profile: emit RELEASE at the
+     * last accepted position. No active gesture is an idempotent success. */
+    int rtaa_receiver_touch_cancel(rtaa_receiver *, uint64_t us);
+    /* Only keys acknowledged by InputBinding may be sent. Each press requires
+     * a matching release; repeats are not implemented by this profile. */
     int rtaa_receiver_key(rtaa_receiver *, uint32_t keycode, bool pressed, uint64_t us);
     int rtaa_receiver_night(rtaa_receiver *, bool night);
     int rtaa_receiver_driving(rtaa_receiver *, uint32_t restrictions);
     int rtaa_receiver_microphone(rtaa_receiver *, const uint8_t *, size_t, uint64_t us);
     int rtaa_receiver_shutdown(rtaa_receiver *);
     rtaa_state rtaa_receiver_state(const rtaa_receiver *);
+    int rtaa_receiver_error(const rtaa_receiver *);
     void rtaa_receiver_statistics(const rtaa_receiver *, rtaa_statistics *);
     /* Geometry/capabilities are immutable during a session. To switch FULLSCREEN
      * and FUSION, close and destroy, then create with the requested geometry. */

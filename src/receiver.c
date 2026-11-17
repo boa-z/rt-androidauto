@@ -17,6 +17,7 @@ struct rtaa_receiver
 {
     rtaa_receiver_config c;
     rtaa_state state;
+    int error;
     rtaa_tls *tls;
     rtaa_parser parser;
     channel channels[RTAA_ROLE_COUNT];
@@ -25,8 +26,19 @@ struct rtaa_receiver
     uint8_t message[RTAA_PLAIN_MAX], cipher[RTAA_FRAME_MAX];
     uint64_t stage_time, last_rx, ping_time, ping_token;
     bool ping_pending, mic_open, night_subscribed, driving_subscribed, closed;
+    bool touching;
+    uint16_t touch_id, touch_x, touch_y;
+    uint8_t bound_keys, pressed_keys;
     rtaa_statistics stats;
 };
+static const uint32_t input_keys[] = {3, 4, 5, 6, 19, 20, 21, 23};
+static uint8_t key_mask(uint32_t key)
+{
+    for (unsigned i = 0; i < sizeof(input_keys) / sizeof(input_keys[0]); ++i)
+        if (input_keys[i] == key)
+            return (uint8_t)(1u << i);
+    return 0;
+}
 size_t rtaa_receiver_storage_size(void)
 {
     return sizeof(rtaa_receiver);
@@ -61,6 +73,8 @@ static void retire(rtaa_receiver *r)
     if (r->mic_open && r->c.sink.microphone)
         r->c.sink.microphone(r->c.sink.ctx, false, 16000, false, false);
     r->mic_open = false;
+    r->touching = false;
+    r->bound_keys = r->pressed_keys = 0;
     if (!r->closed)
     {
         if (r->c.transport.cancel)
@@ -75,6 +89,7 @@ static int fail(rtaa_receiver *r, int rc)
     if (r->state != RTAA_FAILED && r->state != RTAA_CLOSED)
     {
         ++r->stats.errors;
+        r->error = rc;
         retire(r);
         transition(r, RTAA_FAILED, rc);
     }
@@ -209,13 +224,12 @@ static int discovery(rtaa_receiver *r)
         }
         else if (i == RTAA_INPUT)
         {
-            static const uint32_t keys[] = {3, 4, 5, 6, 19, 20, 21, 23};
             c->has_input = true;
             c->input.has_touchscreen = true;
             c->input.touchscreen.width = r->c.geometry.frame_width;
             c->input.touchscreen.height = r->c.geometry.frame_height;
             c->input.keycodes_count = 8;
-            memcpy(c->input.keycodes, keys, sizeof(keys));
+            memcpy(c->input.keycodes, input_keys, sizeof(input_keys));
         }
         else
         {
@@ -431,12 +445,27 @@ static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, c
         return av_message(r, role, message, p, n);
     if (role == RTAA_INPUT && message == 0x8002)
     {
+        if (c->bound)
+            return RTAA_ESTATE;
         aap_Binding v = aap_Binding_init_zero;
         int rc = decode(aap_Binding_fields, &v, p, n);
+        uint8_t keys = 0;
+        if (rc)
+            return rc;
+        for (pb_size_t i = 0; i < v.keycodes_count; ++i)
+        {
+            uint8_t mask = key_mask(v.keycodes[i]);
+            if (!mask || (keys & mask))
+                return RTAA_EPROTO;
+            keys |= mask;
+        }
         if (!rc)
             rc = status(r, id, 0x8003, false);
         if (!rc)
+        {
             c->bound = true;
+            r->bound_keys = keys;
+        }
         return rc;
     }
     if (role == RTAA_SENSOR && message == 0x8001)
@@ -696,6 +725,26 @@ static bool ready(rtaa_receiver *r, rtaa_role role)
 {
     return r && r->state == RTAA_CONNECTED && r->c.channels[role].id && r->channels[role].open;
 }
+static int touch_event(rtaa_receiver *r, uint8_t action, uint16_t id, uint16_t x, uint16_t y,
+                       uint64_t us)
+{
+    aap_InputEvent v = aap_InputEvent_init_zero;
+    v.timestamp = us;
+    v.has_touch = true;
+    v.touch.locations_count = 1;
+    v.touch.locations[0] = (aap_TouchLocation){x, y, id};
+    v.touch.has_action = v.touch.has_action_index = true;
+    v.touch.action = action;
+    int rc =
+        send_pb(r, r->c.channels[RTAA_INPUT].id, 0x8001, aap_InputEvent_fields, &v, true, false);
+    if (rc)
+        return fail(r, rc);
+    r->touching = action != 1;
+    r->touch_id = id;
+    r->touch_x = x;
+    r->touch_y = y;
+    return RTAA_OK;
+}
 int rtaa_receiver_touch(rtaa_receiver *r, uint8_t action, uint16_t id, uint16_t x, uint16_t y,
                         uint64_t us)
 {
@@ -703,27 +752,29 @@ int rtaa_receiver_touch(rtaa_receiver *r, uint8_t action, uint16_t id, uint16_t 
         return RTAA_ESTATE;
     if (action > 2)
         return RTAA_EINVAL;
+    if ((!action && r->touching) || (action && (!r->touching || r->touch_id != id)))
+        return RTAA_ESTATE;
     uint16_t ox, oy;
     int rc = rtaa_touch_map(&r->c.geometry, x, y, &ox, &oy);
-    if (rc)
-        return rc;
-    aap_InputEvent v = aap_InputEvent_init_zero;
-    v.timestamp = us;
-    v.has_touch = true;
-    v.touch.locations_count = 1;
-    v.touch.locations[0] = (aap_TouchLocation){ox, oy, id};
-    v.touch.has_action = v.touch.has_action_index = true;
-    v.touch.action = action;
-    rc = send_pb(r, r->c.channels[RTAA_INPUT].id, 0x8001, aap_InputEvent_fields, &v, true, false);
-    return rc ? fail(r, rc) : RTAA_OK;
+    if (rc == RTAA_EBOUNDS && action == 1)
+        return touch_event(r, 1, id, r->touch_x, r->touch_y, us);
+    return rc ? rc : touch_event(r, action, id, ox, oy, us);
+}
+int rtaa_receiver_touch_cancel(rtaa_receiver *r, uint64_t us)
+{
+    if (!ready(r, RTAA_INPUT) || !r->channels[RTAA_INPUT].bound)
+        return RTAA_ESTATE;
+    return r->touching ? touch_event(r, 1, r->touch_id, r->touch_x, r->touch_y, us) : RTAA_OK;
 }
 int rtaa_receiver_key(rtaa_receiver *r, uint32_t key, bool pressed, uint64_t us)
 {
     if (!ready(r, RTAA_INPUT) || !r->channels[RTAA_INPUT].bound)
         return RTAA_ESTATE;
-    if (key != 3 && key != 4 && key != 5 && key != 6 && key != 19 && key != 20 && key != 21 &&
-        key != 23)
+    uint8_t mask = key_mask(key);
+    if (!(r->bound_keys & mask))
         return RTAA_ENOTSUP;
+    if (((r->pressed_keys & mask) != 0) == pressed)
+        return RTAA_ESTATE;
     aap_InputEvent v = aap_InputEvent_init_zero;
     v.timestamp = us;
     v.has_button = true;
@@ -732,7 +783,13 @@ int rtaa_receiver_key(rtaa_receiver *r, uint32_t key, bool pressed, uint64_t us)
     v.button.buttons[0].pressed = pressed;
     int rc =
         send_pb(r, r->c.channels[RTAA_INPUT].id, 0x8001, aap_InputEvent_fields, &v, true, false);
-    return rc ? fail(r, rc) : RTAA_OK;
+    if (rc)
+        return fail(r, rc);
+    if (pressed)
+        r->pressed_keys |= mask;
+    else
+        r->pressed_keys &= (uint8_t)~mask;
+    return RTAA_OK;
 }
 int rtaa_receiver_night(rtaa_receiver *r, bool night)
 {
@@ -790,6 +847,10 @@ int rtaa_receiver_shutdown(rtaa_receiver *r)
 rtaa_state rtaa_receiver_state(const rtaa_receiver *r)
 {
     return r ? r->state : RTAA_FAILED;
+}
+int rtaa_receiver_error(const rtaa_receiver *r)
+{
+    return r ? r->error : RTAA_EINVAL;
 }
 void rtaa_receiver_statistics(const rtaa_receiver *r, rtaa_statistics *out)
 {
