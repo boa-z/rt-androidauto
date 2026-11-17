@@ -101,11 +101,13 @@ typedef struct _aap_Channel {
     aap_InputChannel input;
     bool has_av_input;
     aap_AVInput av_input;
+    bool has_media_info;
+    aap_Empty media_info;
 } aap_Channel;
 
 typedef struct _aap_Discovery {
     pb_size_t channels_count;
-    aap_Channel channels[7];
+    aap_Channel channels[8];
     bool has_head_unit_name;
     char head_unit_name[96];
     bool has_driver_position;
@@ -283,6 +285,33 @@ typedef struct _aap_CallAvailability {
     bool call_available;
 } aap_CallAvailability;
 
+/* MEDIA_INFO phone-to-head-unit notifications: 0x8001 and 0x8003. */
+typedef struct _aap_MediaStatus {
+    bool has_state;
+    uint32_t state;
+    bool has_source_app;
+    char source_app[256];
+    bool has_position_seconds;
+    uint32_t position_seconds;
+    bool has_shuffle;
+    bool shuffle;
+    bool has_repeat;
+    bool repeat;
+    bool has_repeat_one;
+    bool repeat_one;
+} aap_MediaStatus;
+
+/* Text-only subset. Field 4 album art and fields 5..7 with uncertain meanings
+ are intentionally skipped using protobuf unknown-field handling. */
+typedef struct _aap_MediaMetadata {
+    bool has_title;
+    char title[256];
+    bool has_artist;
+    char artist[256];
+    bool has_album;
+    char album[256];
+} aap_MediaMetadata;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -302,8 +331,8 @@ extern "C" {
 #define aap_InputChannel_init_default            {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_default}
 #define aap_Sensor_init_default                  {0}
 #define aap_SensorChannel_init_default           {0, {aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default, aap_Sensor_init_default}}
-#define aap_Channel_init_default                 {0, false, aap_SensorChannel_init_default, false, aap_AVChannel_init_default, false, aap_InputChannel_init_default, false, aap_AVInput_init_default}
-#define aap_Discovery_init_default               {0, {aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default}, false, "", false, 0, false, "", false, "", false, "", false, ""}
+#define aap_Channel_init_default                 {0, false, aap_SensorChannel_init_default, false, aap_AVChannel_init_default, false, aap_InputChannel_init_default, false, aap_AVInput_init_default, false, aap_Empty_init_default}
+#define aap_Discovery_init_default               {0, {aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default, aap_Channel_init_default}, false, "", false, 0, false, "", false, "", false, "", false, ""}
 #define aap_SetupRequest_init_default            {0}
 #define aap_SetupResponse_init_default           {0, false, 0, 0, {0}}
 #define aap_Start_init_default                   {0, 0}
@@ -330,6 +359,8 @@ extern "C" {
 #define aap_VoiceSession_init_default            {false, 0}
 #define aap_BatteryStatus_init_default           {false, 0, false, 0, false, 0}
 #define aap_CallAvailability_init_default        {false, 0}
+#define aap_MediaStatus_init_default             {false, 0, false, "", false, 0, false, 0, false, 0, false, 0}
+#define aap_MediaMetadata_init_default           {false, "", false, "", false, ""}
 #define aap_Empty_init_zero                      {0}
 #define aap_Status_init_zero                     {0}
 #define aap_ChannelOpen_init_zero                {0, 0}
@@ -343,8 +374,8 @@ extern "C" {
 #define aap_InputChannel_init_zero               {0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false, aap_TouchScreen_init_zero}
 #define aap_Sensor_init_zero                     {0}
 #define aap_SensorChannel_init_zero              {0, {aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero, aap_Sensor_init_zero}}
-#define aap_Channel_init_zero                    {0, false, aap_SensorChannel_init_zero, false, aap_AVChannel_init_zero, false, aap_InputChannel_init_zero, false, aap_AVInput_init_zero}
-#define aap_Discovery_init_zero                  {0, {aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero}, false, "", false, 0, false, "", false, "", false, "", false, ""}
+#define aap_Channel_init_zero                    {0, false, aap_SensorChannel_init_zero, false, aap_AVChannel_init_zero, false, aap_InputChannel_init_zero, false, aap_AVInput_init_zero, false, aap_Empty_init_zero}
+#define aap_Discovery_init_zero                  {0, {aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero, aap_Channel_init_zero}, false, "", false, 0, false, "", false, "", false, "", false, ""}
 #define aap_SetupRequest_init_zero               {0}
 #define aap_SetupResponse_init_zero              {0, false, 0, 0, {0}}
 #define aap_Start_init_zero                      {0, 0}
@@ -371,6 +402,8 @@ extern "C" {
 #define aap_VoiceSession_init_zero               {false, 0}
 #define aap_BatteryStatus_init_zero              {false, 0, false, 0, false, 0}
 #define aap_CallAvailability_init_zero           {false, 0}
+#define aap_MediaStatus_init_zero                {false, 0, false, "", false, 0, false, 0, false, 0, false, 0}
+#define aap_MediaMetadata_init_zero              {false, "", false, "", false, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define aap_Status_status_tag                    1
@@ -404,6 +437,7 @@ extern "C" {
 #define aap_Channel_av_tag                       3
 #define aap_Channel_input_tag                    4
 #define aap_Channel_av_input_tag                 5
+#define aap_Channel_media_info_tag               9
 #define aap_Discovery_channels_tag               1
 #define aap_Discovery_head_unit_name_tag         2
 #define aap_Discovery_driver_position_tag        6
@@ -463,6 +497,15 @@ extern "C" {
 #define aap_BatteryStatus_time_remaining_s_tag   2
 #define aap_BatteryStatus_critical_battery_tag   3
 #define aap_CallAvailability_call_available_tag  1
+#define aap_MediaStatus_state_tag                1
+#define aap_MediaStatus_source_app_tag           2
+#define aap_MediaStatus_position_seconds_tag     3
+#define aap_MediaStatus_shuffle_tag              4
+#define aap_MediaStatus_repeat_tag               5
+#define aap_MediaStatus_repeat_one_tag           6
+#define aap_MediaMetadata_title_tag              1
+#define aap_MediaMetadata_artist_tag             2
+#define aap_MediaMetadata_album_tag              3
 
 /* Struct field encoding specification for nanopb */
 #define aap_Empty_FIELDLIST(X, a) \
@@ -554,13 +597,15 @@ X(a, STATIC,   REQUIRED, INT32,    channel_id,        1) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  sensor,            2) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  av,                3) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  input,             4) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  av_input,          5)
+X(a, STATIC,   OPTIONAL, MESSAGE,  av_input,          5) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  media_info,        9)
 #define aap_Channel_CALLBACK NULL
 #define aap_Channel_DEFAULT NULL
 #define aap_Channel_sensor_MSGTYPE aap_SensorChannel
 #define aap_Channel_av_MSGTYPE aap_AVChannel
 #define aap_Channel_input_MSGTYPE aap_InputChannel
 #define aap_Channel_av_input_MSGTYPE aap_AVInput
+#define aap_Channel_media_info_MSGTYPE aap_Empty
 
 #define aap_Discovery_FIELDLIST(X, a) \
 X(a, STATIC,   REPEATED, MESSAGE,  channels,          1) \
@@ -738,6 +783,23 @@ X(a, STATIC,   OPTIONAL, BOOL,     call_available,    1)
 #define aap_CallAvailability_CALLBACK NULL
 #define aap_CallAvailability_DEFAULT NULL
 
+#define aap_MediaStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   state,             1) \
+X(a, STATIC,   OPTIONAL, STRING,   source_app,        2) \
+X(a, STATIC,   OPTIONAL, UINT32,   position_seconds,   3) \
+X(a, STATIC,   OPTIONAL, BOOL,     shuffle,           4) \
+X(a, STATIC,   OPTIONAL, BOOL,     repeat,            5) \
+X(a, STATIC,   OPTIONAL, BOOL,     repeat_one,        6)
+#define aap_MediaStatus_CALLBACK NULL
+#define aap_MediaStatus_DEFAULT NULL
+
+#define aap_MediaMetadata_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, STRING,   title,             1) \
+X(a, STATIC,   OPTIONAL, STRING,   artist,            2) \
+X(a, STATIC,   OPTIONAL, STRING,   album,             3)
+#define aap_MediaMetadata_CALLBACK NULL
+#define aap_MediaMetadata_DEFAULT NULL
+
 extern const pb_msgdesc_t aap_Empty_msg;
 extern const pb_msgdesc_t aap_Status_msg;
 extern const pb_msgdesc_t aap_ChannelOpen_msg;
@@ -779,6 +841,8 @@ extern const pb_msgdesc_t aap_NavigationFocus_msg;
 extern const pb_msgdesc_t aap_VoiceSession_msg;
 extern const pb_msgdesc_t aap_BatteryStatus_msg;
 extern const pb_msgdesc_t aap_CallAvailability_msg;
+extern const pb_msgdesc_t aap_MediaStatus_msg;
+extern const pb_msgdesc_t aap_MediaMetadata_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define aap_Empty_fields &aap_Empty_msg
@@ -822,6 +886,8 @@ extern const pb_msgdesc_t aap_CallAvailability_msg;
 #define aap_VoiceSession_fields &aap_VoiceSession_msg
 #define aap_BatteryStatus_fields &aap_BatteryStatus_msg
 #define aap_CallAvailability_fields &aap_CallAvailability_msg
+#define aap_MediaStatus_fields &aap_MediaStatus_msg
+#define aap_MediaMetadata_fields &aap_MediaMetadata_msg
 
 /* Maximum encoded size of messages (where known) */
 #define AAP_AAP_PB_H_MAX_SIZE                    aap_Discovery_size
@@ -835,14 +901,16 @@ extern const pb_msgdesc_t aap_CallAvailability_msg;
 #define aap_Buttons_size                         19
 #define aap_CallAvailability_size                2
 #define aap_ChannelOpen_size                     17
-#define aap_Channel_size                         388
-#define aap_Discovery_size                       3228
+#define aap_Channel_size                         390
+#define aap_Discovery_size                       3635
 #define aap_Driving_size                         6
 #define aap_Empty_size                           0
 #define aap_FocusRequest_size                    6
 #define aap_FocusResponse_size                   6
 #define aap_InputChannel_size                    206
 #define aap_InputEvent_size                      108
+#define aap_MediaMetadata_size                   774
+#define aap_MediaStatus_size                     276
 #define aap_MicOpen_size                         17
 #define aap_MicResponse_size                     22
 #define aap_NavigationFocus_size                 6

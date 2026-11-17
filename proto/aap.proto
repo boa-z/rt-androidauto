@@ -41,6 +41,7 @@ message Channel {
   optional AVChannel av = 3;
   optional InputChannel input = 4;
   optional AVInput av_input = 5;
+  optional Empty media_info = 9;
 }
 message Discovery {
   repeated Channel channels = 1;
@@ -82,3 +83,19 @@ message BatteryStatus {
   optional bool critical_battery = 3;
 }
 message CallAvailability { optional bool call_available = 1; }
+// MEDIA_INFO phone-to-head-unit notifications: 0x8001 and 0x8003.
+message MediaStatus {
+  optional uint32 state = 1;
+  optional string source_app = 2;
+  optional uint32 position_seconds = 3;
+  optional bool shuffle = 4;
+  optional bool repeat = 5;
+  optional bool repeat_one = 6;
+}
+// Text-only subset. Field 4 album art and fields 5..7 with uncertain meanings
+// are intentionally skipped using protobuf unknown-field handling.
+message MediaMetadata {
+  optional string title = 1;
+  optional string artist = 2;
+  optional string album = 3;
+}

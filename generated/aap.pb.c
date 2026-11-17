@@ -129,4 +129,10 @@ PB_BIND(aap_BatteryStatus, aap_BatteryStatus, AUTO)
 PB_BIND(aap_CallAvailability, aap_CallAvailability, AUTO)
 
 
+PB_BIND(aap_MediaStatus, aap_MediaStatus, 2)
+
+
+PB_BIND(aap_MediaMetadata, aap_MediaMetadata, 2)
+
+
 

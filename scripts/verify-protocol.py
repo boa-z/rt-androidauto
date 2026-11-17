@@ -35,7 +35,9 @@ for name in ["control/ChannelOpenRequestMessage", "audio/AudioConfigData",
              "navigation/NavigationFocusRequestMessage", "navigation/NavigationFocusResponseMessage",
              "control/VoiceSessionRequestMessage", "control/BatteryStatusMessage",
              "control/CallAvailabilityMessage", "input/InputBindingRequestMessage",
-             "input/InputChannelConfigData", "input/RelativeInputEventData"]:
+             "input/InputChannelConfigData", "input/RelativeInputEventData",
+             "media/MediaPlaybackStatusMessage", "media/MediaPlaybackMetadataMessage",
+             "control/ChannelDescriptorData"]:
     collect("oaa/" + name + ".proto")
 args.output.mkdir(parents=True, exist_ok=True)
 subprocess.run([sys.executable, "-m", "grpc_tools.protoc", "-I", str(args.upstream),
@@ -62,6 +64,9 @@ pairs = [
     (ours.Binding(keycodes=[4, 22, 85, 65536]), upstream("input.InputBindingRequestMessage", "InputBindingRequest")(keycodes=[4, 22, 85, 65536])),
     (ours.InputChannel(keycodes=[4, 22, 85, 65536]), upstream("input.InputChannelConfigData", "InputChannelConfig")(supported_keycodes=[4, 22, 85, 65536])),
     (ours.RelativeInput(scan_code=65536, delta=-3), upstream("input.RelativeInputEventData", "RelativeInputEvent")(scan_code=65536, delta=-3)),
+    (ours.MediaStatus(state=2, source_app="YouTube Music", position_seconds=80, shuffle=False, repeat=False, repeat_one=False), upstream("media.MediaPlaybackStatusMessage", "MediaPlaybackStatus")(playback_state=2, source_app="YouTube Music", position_seconds=80, shuffle=False, repeat=False, repeat_one=False)),
+    (ours.MediaMetadata(title="", artist="音乐家", album="Album"), upstream("media.MediaPlaybackMetadataMessage", "MediaPlaybackMetadata")(title="", artist="音乐家", album="Album")),
+    (ours.Channel(channel_id=155, media_info=ours.Empty()), upstream("control.ChannelDescriptorData", "ChannelDescriptor")(channel_id=155, media_info_channel=upstream("media.MediaChannelData", "MediaInfoChannel")())),
 ]
 for a, b in pairs:
     assert a.SerializeToString() == b.SerializeToString(), (a, b)

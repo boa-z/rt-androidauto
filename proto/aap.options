@@ -1,6 +1,6 @@
 aap.* max_count:8
 aap.* max_size:96
-aap.Discovery.channels max_count:7
+aap.Discovery.channels max_count:8
 aap.AVChannel.audio_configs max_count:1
 aap.AVChannel.video_configs max_count:1
 aap.SetupResponse.configs max_count:1
@@ -11,3 +11,5 @@ aap.SensorEvent.driving max_count:1
 aap.InputChannel.keycodes max_count:32
 aap.Binding.keycodes max_count:32
 aap.RelativeInputs.events max_count:1
+aap.MediaStatus.source_app max_size:256
+aap.MediaMetadata.* max_size:256

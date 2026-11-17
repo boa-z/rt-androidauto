@@ -63,6 +63,8 @@ static void transition(rtaa_receiver *r, rtaa_state state, int error)
 static void retire_channel(rtaa_receiver *r, rtaa_role role)
 {
     channel *c = &r->channels[role];
+    if (role == RTAA_MEDIA_INFO && c->open)
+        r->c.sink.media_info_reset(r->c.sink.ctx);
     if (c->streaming && role != RTAA_MIC && r->c.sink.stop)
         r->c.sink.stop(r->c.sink.ctx, role);
     if (role == RTAA_MIC && r->mic_open)
@@ -293,13 +295,15 @@ static int discovery(rtaa_receiver *r)
             memcpy(c->input.keycodes, r->c.input_keycodes,
                    r->c.input_keycode_count * sizeof(uint32_t));
         }
-        else
+        else if (i == RTAA_SENSOR)
         {
             c->has_sensor = true;
             c->sensor.sensors_count = 2;
             c->sensor.sensors[0].type = 10;
             c->sensor.sensors[1].type = 13;
         }
+        else if (i == RTAA_MEDIA_INFO)
+            c->has_media_info = true;
     }
     return send_pb(r, 0, 6, aap_Discovery_fields, &d, true, true);
 }
@@ -545,6 +549,42 @@ static int service_message(rtaa_receiver *r, rtaa_role role, uint16_t message, c
         return RTAA_ESTATE;
     if (role <= RTAA_SPEECH)
         return av_message(r, role, message, p, n);
+    if (role == RTAA_MEDIA_INFO && message == 0x8001)
+    {
+        aap_MediaStatus v = aap_MediaStatus_init_zero;
+        int rc = decode(aap_MediaStatus_fields, &v, p, n);
+        if (rc || (v.has_state && v.state > 4))
+            return RTAA_EPROTO;
+        rtaa_media_status out = {0};
+        out.has_state = v.has_state;
+        out.has_source_app = v.has_source_app;
+        out.has_position_seconds = v.has_position_seconds;
+        out.has_shuffle = v.has_shuffle;
+        out.has_repeat = v.has_repeat;
+        out.has_repeat_one = v.has_repeat_one;
+        out.state = v.state;
+        copy_string(out.source_app, v.source_app);
+        out.position_seconds = v.position_seconds;
+        out.shuffle = v.shuffle;
+        out.repeat = v.repeat;
+        out.repeat_one = v.repeat_one;
+        return r->c.sink.media_status(r->c.sink.ctx, &out);
+    }
+    if (role == RTAA_MEDIA_INFO && message == 0x8003)
+    {
+        aap_MediaMetadata v = aap_MediaMetadata_init_zero;
+        int rc = decode(aap_MediaMetadata_fields, &v, p, n);
+        if (rc)
+            return rc;
+        rtaa_media_metadata out = {0};
+        out.has_title = v.has_title;
+        out.has_artist = v.has_artist;
+        out.has_album = v.has_album;
+        copy_string(out.title, v.title);
+        copy_string(out.artist, v.artist);
+        copy_string(out.album, v.album);
+        return r->c.sink.media_metadata(r->c.sink.ctx, &out);
+    }
     if (role == RTAA_INPUT && message == 0x8002)
     {
         if (c->bound)
@@ -765,6 +805,9 @@ int rtaa_receiver_create(const rtaa_receiver_config *config, rtaa_receiver **out
         if (i <= RTAA_SPEECH && (!config->sink.start || !config->sink.data || !config->sink.stop))
             return RTAA_EINVAL;
         if (i == RTAA_MIC && !config->sink.microphone)
+            return RTAA_EINVAL;
+        if (i == RTAA_MEDIA_INFO && (!config->sink.media_status || !config->sink.media_metadata ||
+                                     !config->sink.media_info_reset))
             return RTAA_EINVAL;
     }
     if (!any || total > config->memory_limit)

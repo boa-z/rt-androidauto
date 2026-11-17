@@ -27,6 +27,10 @@ typedef struct
     unsigned sensor_starts, sensor_stops;
     uint32_t sensor_type;
     int64_t sensor_interval;
+    bool info_enabled;
+    unsigned media_statuses, metadata_updates, info_resets;
+    rtaa_media_status media_status;
+    rtaa_media_metadata metadata;
 } fixture;
 static uint64_t milliseconds(void *ctx)
 {
@@ -130,6 +134,27 @@ static void sensor_stop(void *ctx, uint32_t type)
     fixture *f = ctx;
     assert(type == 10 || type == 13);
     ++f->sensor_stops;
+}
+static int media_status(void *ctx, const rtaa_media_status *v)
+{
+    fixture *f = ctx;
+    ++f->media_statuses;
+    f->media_status = *v;
+    return f->reject ? RTAA_EIO : 0;
+}
+static int media_metadata(void *ctx, const rtaa_media_metadata *v)
+{
+    fixture *f = ctx;
+    ++f->metadata_updates;
+    f->metadata = *v;
+    return f->reject ? RTAA_EIO : 0;
+}
+static void media_info_reset(void *ctx)
+{
+    fixture *f = ctx;
+    ++f->info_resets;
+    memset(&f->media_status, 0, sizeof(f->media_status));
+    memset(&f->metadata, 0, sizeof(f->metadata));
 }
 static int from_receiver(void *ctx, const rtaa_frame *frame)
 {
@@ -243,7 +268,7 @@ static rtaa_receiver_config configuration(fixture *f)
     c.geometry = (rtaa_geometry){1280, 720, 512, 120, 0, 0, 768, 600};
     /* Deliberately use noncanonical, noncontiguous IDs, including >127. */
     const uint8_t ids[] = {197, 9, 71, 111, 23, 87, 201};
-    for (unsigned i = 0; i < RTAA_ROLE_COUNT; ++i)
+    for (unsigned i = 0; i < sizeof(ids); ++i)
         c.channels[i] = (rtaa_channel_config){ids[i], 32768};
     c.name = "rt-androidauto test";
     c.manufacturer = "test";
@@ -292,7 +317,10 @@ static void connect_version(fixture *f, rtaa_receiver *r, uint8_t minor)
     aap_Discovery d = aap_Discovery_init_zero;
     pb_istream_t in = pb_istream_from_buffer(f->body, f->body_size);
     assert(pb_decode(&in, aap_Discovery_fields, &d));
-    assert(d.channels_count == 7);
+    assert(d.channels_count == (f->info_enabled ? 8 : 7));
+    if (f->info_enabled)
+        assert(d.channels[7].channel_id == 155 && d.channels[7].has_media_info &&
+               !d.channels[7].has_sensor && !d.channels[7].has_av);
     assert(d.channels[0].channel_id == 197 &&
            d.channels[0].av.video_configs[0].margin_width == 512);
     assert(rtaa_receiver_state(r) == RTAA_CONNECTED);
@@ -801,6 +829,97 @@ static void test_configurable_input_and_sensors(fixture *f)
     assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
     peer_free(&f->server);
 }
+static rtaa_receiver *create_media_info(fixture *f)
+{
+    rtaa_receiver_config c = configuration(f);
+    c.channels[RTAA_MEDIA_INFO] = (rtaa_channel_config){155, 32768};
+    rtaa_receiver *r = NULL;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
+    c.sink.media_status = media_status;
+    c.sink.media_metadata = media_metadata;
+    assert(rtaa_receiver_create(&c, &r) == RTAA_EINVAL);
+    c.sink.media_info_reset = media_info_reset;
+    assert(!rtaa_receiver_create(&c, &r));
+    f->info_enabled = true;
+    return r;
+}
+static void test_media_info(fixture *f)
+{
+    rtaa_receiver *r = create_media_info(f);
+    connect(f, r);
+    open_channel(f, r, 155);
+    /* Independently documented captured status: playing, YouTube Music, 80s,
+     * explicitly false shuffle/repeat/repeat-one. */
+    const uint8_t captured[] = {0x08, 2,    0x12, 13,   'Y', 'o',  'u', 'T', 'u',
+                                'b',  'e',  ' ',  'M',  'u', 's',  'i', 'c', 0x18,
+                                80,   0x20, 0,    0x28, 0,   0x30, 0};
+    assert(!send_message(f, r, 155, 0x8001, captured, sizeof(captured)));
+    assert(f->media_statuses == 1 && f->media_status.has_state && f->media_status.state == 2 &&
+           f->media_status.has_source_app && !strcmp(f->media_status.source_app, "YouTube Music") &&
+           f->media_status.has_position_seconds && f->media_status.position_seconds == 80 &&
+           f->media_status.has_shuffle && !f->media_status.shuffle && f->media_status.has_repeat &&
+           !f->media_status.repeat && f->media_status.has_repeat_one &&
+           !f->media_status.repeat_one && !f->writes_size);
+    assert(!send_message(f, r, 155, 0x8001, NULL, 0));
+    assert(f->media_statuses == 2 && !f->media_status.has_state &&
+           !f->media_status.has_source_app && !f->media_status.has_position_seconds &&
+           !f->media_status.has_shuffle && !f->media_status.has_repeat &&
+           !f->media_status.has_repeat_one);
+    /* Optional empty title is present; unknown art/string/numeric fields skip. */
+    const uint8_t text[] = {0x0a, 0,    0x12, 3,   'A', 'B',  'C', 0x1a, 3,    'D', 'E',  'F', 0x22,
+                            4,    0x89, 'P',  'N', 'G', 0x2a, 1,   'x',  0x30, 1,   0x38, 0};
+    assert(!send_message(f, r, 155, 0x8003, text, sizeof(text)));
+    assert(f->metadata_updates == 1 && f->metadata.has_title && !f->metadata.title[0] &&
+           f->metadata.has_artist && !strcmp(f->metadata.artist, "ABC") && f->metadata.has_album &&
+           !strcmp(f->metadata.album, "DEF"));
+    aap_MediaMetadata v = aap_MediaMetadata_init_zero;
+    v.has_title = true;
+    memset(v.title, 'x', sizeof(v.title) - 1);
+    assert(!send_proto(f, r, 155, 0x8003, aap_MediaMetadata_fields, &v));
+    assert(strlen(f->metadata.title) == 255 && !f->metadata.has_artist);
+    assert(!rtaa_receiver_close_channel(r, RTAA_MEDIA_INFO));
+    drain(f);
+    assert(f->info_resets == 1 && !f->metadata.has_title);
+    open_channel(f, r, 155);
+    assert(!send_message_flags(f, r, 155, 9, NULL, 0, RTAA_CONTROL));
+    assert(f->info_resets == 2 && rtaa_receiver_state(r) == RTAA_CONNECTED);
+    open_channel(f, r, 155);
+    assert(!send_message(f, r, 155, 0x8003, NULL, 0));
+    assert(!f->metadata.has_title && !f->metadata.has_artist && !f->metadata.has_album);
+    f->reject = true;
+    assert(send_message(f, r, 155, 0x8001, captured, sizeof(captured)) == RTAA_EIO);
+    assert(f->info_resets == 3 && rtaa_receiver_state(r) == RTAA_FAILED);
+    rtaa_receiver_destroy(r);
+    assert(f->info_resets == 3);
+    peer_free(&f->server);
+    /* Malformed, oversized, invalid-state, wrong-direction and unopened traffic
+     * must fail before application delivery. */
+    const uint8_t invalid_state[] = {8, 5};
+    const uint8_t truncated[] = {0x22, 4, 1};
+    uint8_t oversized[259] = {0x0a, 0x80, 2};
+    memset(oversized + 3, 'z', 256);
+    for (unsigned i = 0; i < 5; ++i)
+    {
+        r = create_media_info(f);
+        connect(f, r);
+        if (i != 4)
+            open_channel(f, r, 155);
+        int rc = i == 0   ? send_message(f, r, 155, 0x8001, invalid_state, sizeof(invalid_state))
+                 : i == 1 ? send_message(f, r, 155, 0x8003, truncated, sizeof(truncated))
+                 : i == 2 ? send_message(f, r, 155, 0x8003, oversized, sizeof(oversized))
+                          : send_message(f, r, 155, 0x8002, NULL, 0);
+        assert(rc == (i < 3 ? RTAA_EPROTO : i == 3 ? RTAA_ENOTSUP : RTAA_ESTATE));
+        assert(!f->media_statuses && !f->metadata_updates && f->info_resets == (i == 4 ? 0 : 1));
+        rtaa_receiver_destroy(r);
+        peer_free(&f->server);
+    }
+    r = create(f);
+    connect(f, r);
+    assert(send_message(f, r, 155, 0x8001, NULL, 0) == RTAA_EPROTO);
+    assert(!f->media_statuses && !f->info_resets);
+    rtaa_receiver_destroy(r);
+    peer_free(&f->server);
+}
 int main(void)
 {
     fixture *f = calloc(1, sizeof(*f));
@@ -963,6 +1082,7 @@ int main(void)
     test_extension_rejection(f);
     test_fragmented_microphone(f);
     test_configurable_input_and_sensors(f);
+    test_media_info(f);
     free(f);
     printf("receiver: PASS; core storage=%zu bytes\n", rtaa_receiver_storage_size());
     return 0;

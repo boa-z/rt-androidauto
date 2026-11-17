@@ -41,7 +41,8 @@ For bounded reconnection use `include/rtaa/connection.h`. The connector supplies
 
 The receiver also supports navigation focus, voice/battery notifications, explicit
 call availability, legacy service close/reopen, fragmented microphone uploads,
-configurable keys/rotary input and sensor scheduler callbacks. See
+configurable keys/rotary input, sensor scheduler callbacks and optional text media
+information notifications. See [media information](docs/media-information.md) and
 [wired extensions and remaining work](docs/wired-extensions.md). A version ceiling
 can be configured; default 1.1 does not claim modern feature completeness.
 

@@ -15,6 +15,7 @@ extern "C"
         RTAA_MIC,
         RTAA_INPUT,
         RTAA_SENSOR,
+        RTAA_MEDIA_INFO,
         RTAA_ROLE_COUNT
     } rtaa_role;
     typedef enum
@@ -29,6 +30,24 @@ extern "C"
         RTAA_FAILED
     } rtaa_state;
     typedef struct rtaa_receiver rtaa_receiver;
+    /* Text-only media information profile. Strings are UTF-8, at most 255
+     * bytes plus NUL. Album art and fields of unknown meaning are skipped.
+     * Optional presence is preserved; callbacks receive one update, not a
+     * merged snapshot. Borrowed pointers expire when the callback returns. */
+    typedef struct
+    {
+        bool has_state, has_source_app, has_position_seconds;
+        bool has_shuffle, has_repeat, has_repeat_one;
+        uint32_t state; /* 0 unknown, 1 stopped, 2 playing, 3 paused, 4 error */
+        char source_app[256];
+        uint32_t position_seconds;
+        bool shuffle, repeat, repeat_one;
+    } rtaa_media_status;
+    typedef struct
+    {
+        bool has_title, has_artist, has_album;
+        char title[256], artist[256], album[256];
+    } rtaa_media_metadata;
     typedef struct
     {
         bool has_level, has_time_remaining, has_critical;
@@ -63,6 +82,12 @@ extern "C"
          * channel/session teardown. Supply both callbacks, or neither. */
         int (*sensor_start)(void *, uint32_t type, int64_t refresh_interval);
         void (*sensor_stop)(void *, uint32_t type);
+        /* All three callbacks are required when MEDIA_INFO is enabled. Errors
+         * retire the session. Reset clears application state once per opened
+         * channel on close/failure/shutdown, including close before any update. */
+        int (*media_status)(void *, const rtaa_media_status *);
+        int (*media_metadata)(void *, const rtaa_media_metadata *);
+        void (*media_info_reset)(void *);
     } rtaa_sink;
     typedef struct
     {
